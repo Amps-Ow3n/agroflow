@@ -152,6 +152,18 @@ CREATE TABLE IF NOT EXISTS deliveries (
     total_deliveries INTEGER DEFAULT 0
 )
 """)
+
+    # -------------------------
+    # Farmer Risk Cache (NEW)
+    # -------------------------
+    cursor.execute("""
+CREATE TABLE IF NOT EXISTS farmer_risk_cache (
+    farmer_id INTEGER PRIMARY KEY,
+    risk_score REAL,
+    risk_level TEXT,
+    last_updated TEXT
+)
+    """)
     conn.commit()
     conn.close()
 
@@ -373,26 +385,28 @@ def check_feasibility(farmer_id: int):
     "promised": round(promised, 2),
     "capacity": round(available, 2),
     "utilization": round(utilization, 2),
-    "over_ratio": round(over_ratio, 2)  # <-- NEW
+    "message": f"Farmer promised {round(over_ratio * 100)}% more than capacity" if over_ratio > 0 else "Within capacity"
 }
 
             if promised > available:
                 overcommitted.append({
-        "crop": crop,
-        "week": week,
-        "promised": round(promised, 2),
-        "capacity": round(available, 2),
-        "over_by": round(promised - available, 2),
-        "over_ratio": round(over_ratio, 2)  # <-- NEW
-    })
+    "crop": crop,
+    "week": week,
+    "promised": round(promised, 2),
+    "capacity": round(available, 2),
+    "over_by": round(promised - available, 2),
+    "over_ratio": round(over_ratio, 2),
+    "message": f"Overcommitted by {round(over_ratio * 100)}% (exceeds capacity)"
+})
             else:
                 feasible.append({
-        "crop": crop,
-        "week": week,
-        "promised": round(promised, 2),
-        "capacity": round(available, 2),
-        "over_ratio": round(over_ratio, 2)  # <-- NEW
-    })
+    "crop": crop,
+    "week": week,
+    "promised": round(promised, 2),
+    "capacity": round(available, 2),
+    "over_ratio": round(over_ratio, 2),
+    "message": "Within capacity"
+})
         # Step 3: confidence
         if not utilization_list:
             confidence = 0
@@ -698,6 +712,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         delivery_rows = cursor.fetchall()
 
         from collections import defaultdict
+
         delivery_map = defaultdict(lambda: {
             "crop": "",
             "zone": "-",
@@ -725,10 +740,10 @@ def generate_farmer_dashboard(conn, farmer_id):
             promised = d["promised"]
 
             status, reason = compute_delivery_status_with_reason(delivered, promised)
+
             total_delivered += delivered
             total_missed += max(promised - delivered, 0)
 
-            # safe weeks
             num_weeks = 1
             if d["start"] and d["end"]:
                 try:
@@ -751,7 +766,7 @@ def generate_farmer_dashboard(conn, farmer_id):
             })
 
         # -----------------------------
-        # RELIABILITY SCORE
+        # RELIABILITY
         # -----------------------------
         total_promised = sum(c["total_promised"] for c in commitment_summary)
         completion_rate = (total_delivered / total_promised) if total_promised > 0 else 0
@@ -761,6 +776,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         # RISK ALERTS
         # -----------------------------
         risk_alerts = []
+
         cursor.execute("""
             SELECT crop, over_amount
             FROM decision_logs
@@ -781,9 +797,10 @@ def generate_farmer_dashboard(conn, farmer_id):
                 risk_alerts.append({"severity": 5, "message": f"{d['crop']} partially delivered"})
 
         # -----------------------------
-        # DECISION INTELLIGENCE (WHY) 
+        # DECISION INTELLIGENCE
         # -----------------------------
         decision_intelligence = []
+
         cursor.execute("""
             SELECT crop, explanation
             FROM decision_logs
@@ -792,14 +809,12 @@ def generate_farmer_dashboard(conn, farmer_id):
         """, (farmer_id,))
         rows = cursor.fetchall()
 
-        # Map latest explanation per crop
         decision_map = {}
         for r in rows:
             crop = r["crop"]
             if crop not in decision_map:
                 decision_map[crop] = r["explanation"]
 
-        # Build safe decision_intelligence array
         for item in commitment_summary:
             crop = item["crop"]
             zone = item.get("zone", "-")
@@ -809,6 +824,28 @@ def generate_farmer_dashboard(conn, farmer_id):
                     "zone": zone,
                     "why": decision_map[crop]
                 })
+
+        # -----------------------------
+        # RISK (CACHE FIRST)
+        # -----------------------------
+        cursor.execute("""
+            SELECT risk_score, risk_level
+            FROM farmer_risk_cache
+            WHERE farmer_id = ?
+        """, (farmer_id,))
+        row = cursor.fetchone()
+
+        if row:
+            risk_summary = {
+                "risk_score": row["risk_score"],
+                "risk_level": row["risk_level"]
+            }
+        else:
+            risk = compute_farmer_risk(cursor, farmer_id)
+            risk_summary = {
+                "risk_score": risk["risk_score"],
+                "risk_level": risk["risk_level"]
+            }
 
         # -----------------------------
         # FINAL RESPONSE
@@ -822,6 +859,7 @@ def generate_farmer_dashboard(conn, farmer_id):
                 "missedDeliveries": total_missed
             },
             "risk_alerts": risk_alerts,
+            "risk_summary": risk_summary,
             "reliability_scores": {
                 "score": reliability,
                 "based_on": "quantity"
@@ -1247,6 +1285,19 @@ def compute_farmer_risk(cursor, farmer_id):
     # Overcommitment units (FIXED BUG)
     # -----------------------------
     over_amount_units = max(0, total_promised_all - total_supply)
+
+    # -----------------------------
+    # SAVE TO CACHE (NEW)
+    # -----------------------------
+    cursor.execute("""
+INSERT OR REPLACE INTO farmer_risk_cache (farmer_id, risk_score, risk_level, last_updated)
+VALUES (?, ?, ?, ?)
+""", (
+    farmer_id,
+    round(risk_score, 2),
+    level,
+    datetime.now().isoformat()
+))
     # -----------------------------
     # Final response
     # -----------------------------
@@ -1380,15 +1431,20 @@ def recompute_all_risks():
     conn, cursor = get_db()
 
     try:
+        # 1. Clear old logs
         cursor.execute("DELETE FROM decision_logs")
 
+        # 2. Get all farmers
         cursor.execute("SELECT id FROM users WHERE role = 'farmer'")
         farmers = cursor.fetchall()
 
         for f in farmers:
             farmer_id = f["id"]
 
-            # get supply PER farmer
+            # ✅ STEP A: Compute + cache risk
+            compute_farmer_risk(cursor, farmer_id)
+
+            # ✅ STEP B: System-level overcommit logging
             cursor.execute("""
                 SELECT COALESCE(SUM(qty_max),0)
                 FROM farmer_supply
@@ -1396,7 +1452,6 @@ def recompute_all_risks():
             """, (farmer_id,))
             total_supply = cursor.fetchone()[0] or 0
 
-            # get commitments PER farmer (FIXED)
             cursor.execute("""
                 SELECT crop, COALESCE(SUM(promised_qty),0) AS total
                 FROM commitments
@@ -1408,22 +1463,27 @@ def recompute_all_risks():
             for r in rows:
                 crop = r["crop"]
                 promised = r["total"]
-                
+
                 over = max(0, promised - total_supply)
-                over_ratio = round(over / total_supply, 2) if total_supply > 0 else 0
+
+                if total_supply > 0:
+                    over_ratio = round(over / total_supply, 2)
+                else:
+                    over_ratio = 0
 
                 if over > 0:
                     cursor.execute("""
-        INSERT INTO decision_logs
-        (farmer_id, crop, week, over_amount, explanation)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        farmer_id,
-        crop,
-        datetime.now().date().isoformat(),
-        over,
-        f"{crop} overcommitment by {int(over)} units (ratio {over_ratio})"  # <-- ADD ratio
-    ))
+                        INSERT INTO decision_logs
+                        (farmer_id, crop, week, over_amount, explanation)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        farmer_id,
+                        crop,
+                        datetime.now().date().isoformat(),
+                        over,
+                        f"{crop} overcommitted by {int(over)} units ({int(over_ratio*100)}% beyond capacity)"
+                    ))
+
         conn.commit()
 
     finally:
@@ -1666,6 +1726,7 @@ def delete_supply(supply_id: int, user=Depends(require_farmer)):
         raise HTTPException(404, "Supply not found")
 
     conn.commit()
+    recompute_all_risks()
     conn.close()
 
     return {"message": "Supply deleted"}
@@ -1824,7 +1885,6 @@ def list_commitments(user=Depends(require_farmer)):
 # ==================================================
 # UPDATE COMMITMENT
 # ==================================================
-
 @app.put("/commitment/{commitment_id}", response_model=CommitmentOut)
 def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends(require_farmer)):
 
@@ -1899,6 +1959,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     ))
 
     conn.commit()
+    recompute_all_risks()
     conn.close()
 
     return CommitmentOut(
@@ -1918,7 +1979,6 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
 # ==================================================
 # DELETE COMMITMENT
 # ==================================================
-
 @app.delete("/commitment/{commitment_id}")
 def delete_commitment(commitment_id: int, user=Depends(require_farmer)):
 
@@ -1931,6 +1991,7 @@ def delete_commitment(commitment_id: int, user=Depends(require_farmer)):
 
     deleted = cursor.rowcount
     conn.commit()
+    recompute_all_risks() 
     conn.close()
 
     if not deleted:
@@ -2064,7 +2125,7 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         """, (commitment_status, d.commitment_id))
 
         conn.commit()
-
+        recompute_all_risks()
         # ----------------------------
         # Update farmer trust
         # ----------------------------
@@ -2267,7 +2328,6 @@ def farmer_dashboard(farmer_id: int, user=Depends(require_user)):
 
 @app.get("/dashboard/admin")
 def admin_dashboard(user=Depends(require_admin)):
-    recompute_all_risks()
     conn, cursor = get_db()
     try:
         return generate_admin_dashboard(conn)
@@ -2414,7 +2474,6 @@ def get_all_farmers(user=Depends(require_admin)):
 
 @app.get("/risk-intelligence")
 def risk_intelligence(user=Depends(require_admin)):
-    recompute_all_risks()
     conn, cursor = get_db()
 
     try:
@@ -2424,7 +2483,26 @@ def risk_intelligence(user=Depends(require_admin)):
         results = []
 
         for fid in farmers:
-            risk = compute_farmer_risk(cursor, fid)
+
+            # ✅ READ FROM CACHE
+            cursor.execute("""
+                SELECT risk_score, risk_level
+                FROM farmer_risk_cache
+                WHERE farmer_id = ?
+            """, (fid,))
+
+            row = cursor.fetchone()
+
+            if row:
+                risk = {
+                    "risk_score": row["risk_score"],
+                    "risk_level": row["risk_level"],
+                    "over_amount": 0,
+                    "main_crop": "unknown"
+                }
+            else:
+                risk = compute_farmer_risk(cursor, fid)
+
             prediction = predict_failure(risk)
 
             results.append({
@@ -2433,16 +2511,17 @@ def risk_intelligence(user=Depends(require_admin)):
                 "prediction": prediction
             })
 
-        # Sort by highest risk
-        results.sort(key=lambda x: x["risk"].get("risk_score", 0), reverse=True)
+        # SORT
+        results.sort(
+            key=lambda x: x["risk"].get("risk_score", 0),
+            reverse=True
+        )
 
-        # Add interventions AFTER sorting (needed for reallocation logic)
+        # INTERVENTIONS
         for r in results:
             r["intervention"] = generate_intervention(r["risk"], results)
 
-        # -----------------------------
-        # Build frontend response
-        # -----------------------------
+        # BUILD RESPONSE
         risk_alerts = []
         farmer_risk_ranking = []
         recommended_actions = []
@@ -2451,41 +2530,42 @@ def risk_intelligence(user=Depends(require_admin)):
         for r in results:
             risk = r["risk"]
             prediction = r["prediction"]
-            intervention = r["intervention"]
-            
-            if risk.get("risk_level") == "HIGH" and risk.get("over_amount", 0) > 0:
+
+            if risk.get("risk_level") == "HIGH":
                 high_risk_count += 1
 
                 risk_alerts.append({
-        "farmer_id": r["farmer_id"],
-        "prediction": round(prediction["failure_probability"] * 100, 1),
-        "over_amount": risk["over_amount"],
-        "crop": risk["main_crop"]
-    })
+                    "farmer_id": r["farmer_id"],
+                    "prediction": round(prediction["failure_probability"] * 100, 1),
+                    "over_amount": risk.get("over_amount", 0),
+                    "crop": risk.get("main_crop", "unknown")
+                })
+
             farmer_risk_ranking.append({
                 "farmer_id": r["farmer_id"],
                 "risk_level": risk.get("risk_level"),
                 "prediction": prediction["failure_probability"] * 100
             })
 
-            for action in intervention["actions"]:
+            for action in r["intervention"]["actions"]:
                 recommended_actions.append(
                     f"Farmer {r['farmer_id']}: {action}"
                 )
 
-        # System status
+        # SYSTEM STATUS
         if high_risk_count > 2:
             system_status = "UNSTABLE"
         elif high_risk_count > 0:
             system_status = "WARNING"
         else:
             system_status = "STABLE"
+
         return {
             "system_status": system_status,
             "risk_alerts": risk_alerts,
             "farmer_risk_ranking": farmer_risk_ranking,
             "recommended_actions": recommended_actions,
-            "full_results": results   # 🔥 for future UI graphs
+            "full_results": results
         }
 
     finally:
@@ -2620,13 +2700,33 @@ GROUP BY c.farmer_id
 
         completion = (delivered / promised) if promised > 0 else 0
 
-        farmers.append({
-            "farmer_id": r["farmer_id"],
-            "promised": promised,
-            "delivered": delivered,
-            "reliability": round(completion * 100, 2)
-        })
+        # -----------------------------
+        # GET RISK FROM CACHE
+        # -----------------------------
+        cursor.execute("""
+    SELECT risk_score, risk_level
+    FROM farmer_risk_cache
+    WHERE farmer_id = ?
+""", (r["farmer_id"],))
+        risk_row = cursor.fetchone()
 
+        if risk_row:
+            risk_level = risk_row["risk_level"]
+            risk_score = risk_row["risk_score"]
+        else:
+            risk = compute_farmer_risk(cursor, r["farmer_id"])
+            risk_level = risk["risk_level"]
+            risk_score = risk["risk_score"]
+
+        farmers.append({
+    "farmer_id": r["farmer_id"],
+    "promised": promised,
+    "delivered": delivered,
+    "reliability": round(completion * 100, 2),
+    "risk_level": risk_level,
+    "risk_score": risk_score,
+    "message": f"{risk_level} risk, {int(completion * 100)}% delivery success"
+})
     # -----------------------------
     # OVERCOMMITMENT
     # -----------------------------
@@ -2736,3 +2836,76 @@ def get_all_users(user=Depends(require_admin)):
         {"id": r["id"], "role": r["role"]}
         for r in rows
     ]
+
+@app.get("/report/farmer/{farmer_id}")
+def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
+    conn, cursor = get_db()
+
+    try:
+        # -----------------------------
+        # AUTH CHECK (important)
+        # -----------------------------
+        if user["role"] == "farmer" and user["id"] != farmer_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # -----------------------------
+        # GET RISK FROM CACHE FIRST
+        # -----------------------------
+        cursor.execute("""
+            SELECT risk_score, risk_level
+            FROM farmer_risk_cache
+            WHERE farmer_id = ?
+        """, (farmer_id,))
+        row = cursor.fetchone()
+
+        if row:
+            risk_level = row["risk_level"]
+            risk_score = row["risk_score"]
+        else:
+            # fallback (rare)
+            risk = compute_farmer_risk(cursor, farmer_id)
+            risk_level = risk["risk_level"]
+            risk_score = risk["risk_score"]
+
+        # -----------------------------
+        # GET DELIVERY RATE (light query)
+        # -----------------------------
+        cursor.execute("""
+            SELECT 
+                SUM(d.delivered_qty) as total_delivered,
+                SUM(c.promised_qty) as total_promised
+            FROM commitments c
+            LEFT JOIN deliveries d ON d.commitment_id = c.id
+            WHERE c.farmer_id = ?
+        """, (farmer_id,))
+        data = cursor.fetchone()
+
+        total_delivered = data["total_delivered"] or 0
+        total_promised = data["total_promised"] or 0
+
+        delivery_rate = (total_delivered / total_promised) if total_promised > 0 else 0
+
+        # -----------------------------
+        # FINAL REPORT
+        # -----------------------------
+        return {
+            "farmer_id": farmer_id,
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "delivery_rate": round(delivery_rate, 2),
+            "message": f"Farmer is {risk_level} risk with {int(delivery_rate * 100)}% delivery success"
+        }
+
+    finally:
+        conn.close()
+
+@app.get("/debug/risk-cache")
+def debug_risk_cache():
+    conn, cursor = get_db()
+
+    cursor.execute("SELECT * FROM farmer_risk_cache")
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
