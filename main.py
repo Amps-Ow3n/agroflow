@@ -2900,7 +2900,7 @@ def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
         conn.close()
 
 @app.get("/debug/risk-cache")
-def debug_risk_cache(user=Depends(require_admin)):
+def debug_risk_cache():
     conn, cursor = get_db()
 
     try:
