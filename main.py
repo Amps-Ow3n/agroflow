@@ -2900,12 +2900,14 @@ def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
         conn.close()
 
 @app.get("/debug/risk-cache")
-def debug_risk_cache():
+def debug_risk_cache(user=Depends(require_admin)):
     conn, cursor = get_db()
 
-    cursor.execute("SELECT * FROM farmer_risk_cache")
-    rows = cursor.fetchall()
+    try:
+        cursor.execute("SELECT * FROM farmer_risk_cache")
+        rows = cursor.fetchall()
 
-    conn.close()
+        return [dict(row) for row in rows]
 
-    return [dict(r) for r in rows]
+    finally:
+        conn.close()
