@@ -49,12 +49,19 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 BASE_DIR = Path(__file__).resolve().parent
 DB_FILE = BASE_DIR / "agroflow.db"
 
-def get_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn, conn.cursor()
+import psycopg2
+import os
+from psycopg2.extras import RealDictCursor
 
+def get_db():
+    db_url = os.getenv("DATABASE_URL")
+
+    if not db_url:
+        raise Exception("DATABASE_URL not set")
+
+    conn = psycopg2.connect(db_url)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    return conn, cursor
 # ======================================================
 # DATABASE INITIALIZATION
 # ======================================================
@@ -343,7 +350,7 @@ def check_feasibility(farmer_id: int):
         cursor.execute("""
             SELECT crop, promised_qty, delivery_start, delivery_end
             FROM commitments
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
         """, (farmer_id,))
         commitments = [dict(row) for row in cursor.fetchall()]
 
@@ -351,7 +358,7 @@ def check_feasibility(farmer_id: int):
         cursor.execute("""
             SELECT crop, qty_max, available_from, available_to
             FROM farmer_supply
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
         """, (farmer_id,))
         supplies = [dict(row) for row in cursor.fetchall()]
 
@@ -506,7 +513,7 @@ def aggregate_supply(db, farmer_id):
     rows = db.execute("""
         SELECT crop, zone, SUM(qty_max) as total_capacity
         FROM farmer_supply
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
         GROUP BY crop, zone
     """, (farmer_id,)).fetchall()
 
@@ -529,7 +536,7 @@ def aggregate_commitments(db, farmer_id):
     rows = db.execute("""
         SELECT crop, zone, SUM(promised_qty) as total_committed
         FROM commitments
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
         GROUP BY crop, zone
     """, (farmer_id,)).fetchall()
 
@@ -550,7 +557,7 @@ def compute_delivery_metrics(db, farmer_id):
         SELECT d.crop, d.zone, SUM(d.delivered_qty) as total_delivered
         FROM deliveries d
         JOIN commitments c ON d.commitment_id = c.id
-        WHERE c.farmer_id = ?
+        WHERE c.farmer_id = %s
         GROUP BY d.crop, d.zone
     """, (farmer_id,)).fetchall()
 
@@ -586,7 +593,7 @@ def update_farmer_trust(farmer_id, delivery_status):
     cursor.execute("""
         SELECT score, total_deliveries
         FROM farmer_trust
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
     """, (farmer_id,))
 
     row = cursor.fetchone()
@@ -598,7 +605,7 @@ def update_farmer_trust(farmer_id, delivery_status):
 
         cursor.execute("""
             INSERT INTO farmer_trust (farmer_id, score, total_deliveries)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (farmer_id, score, total))
 
     else:
@@ -622,8 +629,8 @@ def update_farmer_trust(farmer_id, delivery_status):
 
     cursor.execute("""
         UPDATE farmer_trust
-        SET score = ?, total_deliveries = ?
-        WHERE farmer_id = ?
+        SET score = %s, total_deliveries = %s
+        WHERE farmer_id = %s
     """, (score, total, farmer_id))
 
     conn.commit()
@@ -642,7 +649,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         cursor.execute("""
             SELECT crop, zone, SUM(qty_max) AS total_capacity
             FROM farmer_supply
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
             GROUP BY crop, zone
         """, (farmer_id,))
         supply_rows = cursor.fetchall()
@@ -667,7 +674,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         cursor.execute("""
             SELECT crop, zone, SUM(promised_qty) AS total_committed
             FROM commitments
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
             GROUP BY crop, zone
         """, (farmer_id,))
         commitment_rows = cursor.fetchall()
@@ -707,7 +714,7 @@ def generate_farmer_dashboard(conn, farmer_id):
                 FROM deliveries
                 GROUP BY commitment_id
             ) d ON d.commitment_id = c.id
-            WHERE c.farmer_id = ?
+            WHERE c.farmer_id = %s
         """, (farmer_id,))
         delivery_rows = cursor.fetchall()
 
@@ -780,7 +787,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         cursor.execute("""
             SELECT crop, over_amount
             FROM decision_logs
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
         """, (farmer_id,))
         for r in cursor.fetchall():
             over_amount = r["over_amount"] or 0
@@ -804,7 +811,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         cursor.execute("""
             SELECT crop, explanation
             FROM decision_logs
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
             ORDER BY id DESC
         """, (farmer_id,))
         rows = cursor.fetchall()
@@ -831,7 +838,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         cursor.execute("""
             SELECT risk_score, risk_level
             FROM farmer_risk_cache
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
         """, (farmer_id,))
         row = cursor.fetchone()
 
@@ -1094,7 +1101,7 @@ def log_decision(farmer_id, category, message):
     cursor.execute("""
         INSERT INTO decision_logs
         (farmer_id, crop, week, over_amount, explanation)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (
         farmer_id,
         category,
@@ -1141,7 +1148,7 @@ def get_farmer_history(cursor, farmer_id):
                c.promised_qty
         FROM deliveries d
         JOIN commitments c ON d.commitment_id = c.id
-        WHERE c.farmer_id = ?
+        WHERE c.farmer_id = %s
     """, (farmer_id,))
     
     return [dict(r) for r in cursor.fetchall()]
@@ -1164,7 +1171,7 @@ def compute_overcommitment(cursor, farmer_id):
     cursor.execute("""
         SELECT SUM(promised_qty) as total_promised
         FROM commitments
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
     """, (farmer_id,))
     promised = cursor.fetchone()["total_promised"] or 0
 
@@ -1172,7 +1179,7 @@ def compute_overcommitment(cursor, farmer_id):
     cursor.execute("""
         SELECT SUM(qty_max) as total_supply
         FROM farmer_supply
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
     """, (farmer_id,))
     supply = cursor.fetchone()["total_supply"] or 0
 
@@ -1253,7 +1260,7 @@ def compute_farmer_risk(cursor, farmer_id):
     cursor.execute("""
         SELECT crop
         FROM commitments
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
         ORDER BY id DESC
         LIMIT 1
     """, (farmer_id,))
@@ -1267,7 +1274,7 @@ def compute_farmer_risk(cursor, farmer_id):
     cursor.execute("""
     SELECT SUM(promised_qty) as total_promised
     FROM commitments
-    WHERE farmer_id = ?
+    WHERE farmer_id = %s
 """, (farmer_id,))
     total_promised_all = cursor.fetchone()["total_promised"] or 0
 
@@ -1277,7 +1284,7 @@ def compute_farmer_risk(cursor, farmer_id):
     cursor.execute("""
     SELECT SUM(qty_max) as total_supply
     FROM farmer_supply
-    WHERE farmer_id = ?
+    WHERE farmer_id = %s
 """, (farmer_id,))
     total_supply = cursor.fetchone()["total_supply"] or 0
 
@@ -1291,7 +1298,7 @@ def compute_farmer_risk(cursor, farmer_id):
     # -----------------------------
     cursor.execute("""
 INSERT OR REPLACE INTO farmer_risk_cache (farmer_id, risk_score, risk_level, last_updated)
-VALUES (?, ?, ?, ?)
+VALUES (%s, %s, %s, %s)
 """, (
     farmer_id,
     round(risk_score, 2),
@@ -1441,21 +1448,21 @@ def recompute_all_risks():
         for f in farmers:
             farmer_id = f["id"]
 
-            # ✅ STEP A: Compute + cache risk
+            #STEP A: Compute + cache risk
             compute_farmer_risk(cursor, farmer_id)
 
-            # ✅ STEP B: System-level overcommit logging
+            #STEP B: System-level overcommit logging
             cursor.execute("""
                 SELECT COALESCE(SUM(qty_max),0)
                 FROM farmer_supply
-                WHERE farmer_id = ?
+                WHERE farmer_id = %s
             """, (farmer_id,))
             total_supply = cursor.fetchone()[0] or 0
 
             cursor.execute("""
                 SELECT crop, COALESCE(SUM(promised_qty),0) AS total
                 FROM commitments
-                WHERE farmer_id = ?
+                WHERE farmer_id = %s
                 GROUP BY crop
             """, (farmer_id,))
             rows = cursor.fetchall()
@@ -1475,7 +1482,7 @@ def recompute_all_risks():
                     cursor.execute("""
                         INSERT INTO decision_logs
                         (farmer_id, crop, week, over_amount, explanation)
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s)
                     """, (
                         farmer_id,
                         crop,
@@ -1517,8 +1524,8 @@ def create_supply(s: SupplyCreate, user=Depends(require_farmer)):
     existing = cursor.execute("""
         SELECT id, qty_min, qty_max
         FROM farmer_supply
-        WHERE farmer_id=? AND crop=? AND zone=? 
-        AND available_from=? AND available_to=?
+        WHERE farmer_id=%s AND crop=%s AND zone=%s 
+        AND available_from=%s AND available_to=%s
     """, (
         user["id"],
         crop,
@@ -1538,8 +1545,8 @@ def create_supply(s: SupplyCreate, user=Depends(require_farmer)):
 
         cursor.execute("""
             UPDATE farmer_supply
-            SET qty_min=?, qty_max=?, last_updated=?
-            WHERE id=?
+            SET qty_min=%s, qty_max=%s, last_updated=%s
+            WHERE id=%s
         """, (new_min, new_max, now, supply_id))
 
         conn.commit()
@@ -1565,7 +1572,7 @@ def create_supply(s: SupplyCreate, user=Depends(require_farmer)):
             farmer_id, crop, qty_min, qty_max, zone,
             available_from, available_to, last_updated
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         user["id"],
         crop,
@@ -1608,15 +1615,15 @@ def list_supplies(
     SELECT id, farmer_id, crop, qty_min, qty_max, zone,
            available_from, available_to, last_updated
     FROM farmer_supply
-    WHERE farmer_id=?
+    WHERE farmer_id=%s
 """
     params = [user["id"]]
     if crop:
-        query += " AND crop=?"
+        query += " AND crop=%s"
         params.append(normalize(crop))
 
     if zone:
-        query += " AND zone=?"
+        query += " AND zone=%s"
         params.append(zone)
 
     query += " ORDER BY last_updated DESC"
@@ -1657,7 +1664,7 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
     row = cursor.execute("""
         SELECT crop, zone, qty_min, qty_max, available_from, available_to
         FROM farmer_supply
-        WHERE id=? AND farmer_id=?
+        WHERE id=%s AND farmer_id=%s
     """, (supply_id, user["id"])).fetchone()
 
     if not row:
@@ -1680,8 +1687,8 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
 
     cursor.execute("""
         UPDATE farmer_supply
-        SET qty_min=?, qty_max=?, available_from=?, available_to=?, last_updated=?
-        WHERE id=? AND farmer_id=?
+        SET qty_min=%s, qty_max=%s, available_from=%s, available_to=%s, last_updated=%s
+        WHERE id=%s AND farmer_id=%s
     """, (
         qty_min,
         qty_max,
@@ -1717,7 +1724,7 @@ def delete_supply(supply_id: int, user=Depends(require_farmer)):
     conn, cursor = get_db()
 
     cursor.execute(
-        "DELETE FROM farmer_supply WHERE id=? AND farmer_id=?",
+        "DELETE FROM farmer_supply WHERE id=%s AND farmer_id=%s",
         (supply_id, user["id"])
     )
 
@@ -1748,7 +1755,7 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         supply_rows = cursor.execute("""
     SELECT qty_max, available_from, available_to
     FROM farmer_supply
-    WHERE farmer_id=? AND crop=? AND zone=?
+    WHERE farmer_id=%s AND crop=%s AND zone=%s
 """, (user["id"], crop, cmt.zone)).fetchall()
 
         if not supply_rows:
@@ -1776,7 +1783,7 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         row = cursor.execute("""
             SELECT COALESCE(SUM(promised_qty),0) as total
             FROM commitments
-            WHERE farmer_id=? AND crop=? AND zone=?
+            WHERE farmer_id=%s AND crop=%s AND zone=%s
         """, (user["id"], crop, cmt.zone)).fetchone()
 
         current_commitments = row["total"] if row else 0
@@ -1793,7 +1800,7 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
                 delivery_start, delivery_end,
                 status, created_at, last_updated
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user["id"],
             crop,
@@ -1812,7 +1819,7 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         if over_commit > 0:
             cursor.execute("""
         INSERT INTO decision_logs (farmer_id, crop, week, over_amount, explanation)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (
         user["id"],
         crop,
@@ -1823,7 +1830,7 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         else:
             cursor.execute("""
         INSERT INTO decision_logs (farmer_id, crop, week, over_amount, explanation)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     """, (
         user["id"],
         crop,
@@ -1862,7 +1869,7 @@ def list_commitments(user=Depends(require_farmer)):
                delivery_start, delivery_end,
                status, created_at, last_updated
         FROM commitments
-        WHERE farmer_id=?
+        WHERE farmer_id=%s
         ORDER BY created_at DESC
     """, (user["id"],)).fetchall()
     conn.close()
@@ -1896,7 +1903,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
                delivery_start, delivery_end,
                status, created_at
         FROM commitments
-        WHERE id=? AND farmer_id=?
+        WHERE id=%s AND farmer_id=%s
     """, (commitment_id, user["id"])).fetchone()
 
     if not row:
@@ -1913,7 +1920,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     supply_row = cursor.execute("""
         SELECT qty_max, available_from, available_to
         FROM farmer_supply
-        WHERE farmer_id=? AND crop=? AND zone=?
+        WHERE farmer_id=%s AND crop=%s AND zone=%s
     """, (user["id"], crop, zone)).fetchone()
 
     if not supply_row:
@@ -1929,7 +1936,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     supply_rows = cursor.execute("""
     SELECT qty_max
     FROM farmer_supply
-    WHERE farmer_id=? AND crop=? AND zone=?
+    WHERE farmer_id=%s AND crop=%s AND zone=%s
 """, (user["id"], crop, zone)).fetchall()
 
     total_capacity = sum(r["qty_max"] for r in supply_rows)
@@ -1947,8 +1954,8 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
 
     cursor.execute("""
         UPDATE commitments
-        SET promised_qty=?, delivery_start=?, delivery_end=?, last_updated=?
-        WHERE id=? AND farmer_id=?
+        SET promised_qty=%s, delivery_start=%s, delivery_end=%s, last_updated=%s
+        WHERE id=%s AND farmer_id=%s
     """, (
         promised_qty,
         delivery_start.isoformat(),
@@ -1975,7 +1982,6 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
         last_updated=last_updated_dt
     )
 
-
 # ==================================================
 # DELETE COMMITMENT
 # ==================================================
@@ -1986,7 +1992,7 @@ def delete_commitment(commitment_id: int, user=Depends(require_farmer)):
 
     cursor.execute("""
         DELETE FROM commitments
-        WHERE id=? AND farmer_id=?
+        WHERE id=%s AND farmer_id=%s
     """, (commitment_id, user["id"]))
 
     deleted = cursor.rowcount
@@ -2041,7 +2047,7 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         cursor.execute("""
             SELECT farmer_id, promised_qty
             FROM commitments
-            WHERE id = ?
+            WHERE id = %s
         """, (d.commitment_id,))
         commitment = cursor.fetchone()
 
@@ -2061,13 +2067,13 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         cursor.execute("""
     SELECT SUM(delivered_qty) as total_delivered
     FROM deliveries
-    WHERE commitment_id = ?
+    WHERE commitment_id = %s
 """, (d.commitment_id,))
         previous_total = cursor.fetchone()["total_delivered"] or 0
         cursor.execute("""
     SELECT delivery_start, delivery_end
     FROM commitments
-    WHERE id = ?
+    WHERE id = %s
 """, (d.commitment_id,))
         dates = cursor.fetchone()
 
@@ -2088,7 +2094,7 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         cursor.execute("""
     INSERT INTO deliveries
     (commitment_id, delivered_qty, week_start, week_end, status, weekly_promised_qty)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (%s, %s, %s, %s, %s, %s)
 """, (
     d.commitment_id,
     d.delivered_qty,
@@ -2104,7 +2110,7 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         cursor.execute("""
             SELECT SUM(delivered_qty) as total_delivered
             FROM deliveries
-            WHERE commitment_id = ?
+            WHERE commitment_id = %s
         """, (d.commitment_id,))
         total_delivered = cursor.fetchone()["total_delivered"] or 0
         # SAFETY: prevent over-delivery weirdness
@@ -2120,8 +2126,8 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         # Update commitment
         cursor.execute("""
             UPDATE commitments
-            SET status = ?, last_updated = CURRENT_TIMESTAMP
-            WHERE id = ?
+            SET status = %s, last_updated = CURRENT_TIMESTAMP
+            WHERE id = %s
         """, (commitment_status, d.commitment_id))
 
         conn.commit()
@@ -2184,13 +2190,13 @@ def get_deliveries(
 
         FROM deliveries d
         JOIN commitments c ON d.commitment_id = c.id
-        WHERE c.farmer_id = ?
+        WHERE c.farmer_id = %s
     """
 
     params = [farmer_id]
 
     if crop:
-        query += " AND LOWER(c.crop) = ?"
+        query += " AND LOWER(c.crop) = %s"
         params.append(crop.lower())
 
     cursor.execute(query, params)
@@ -2219,7 +2225,7 @@ def delivery_history(commitment_id: int, user=Depends(require_user)):
     conn, cursor = get_db()
 
     # Fetch commitment owner
-    cursor.execute("SELECT farmer_id FROM commitments WHERE id = ?", (commitment_id,))
+    cursor.execute("SELECT farmer_id FROM commitments WHERE id = %s", (commitment_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
@@ -2240,7 +2246,7 @@ def delivery_history(commitment_id: int, user=Depends(require_user)):
     c.promised_qty
 FROM deliveries d
 JOIN commitments c ON d.commitment_id = c.id
-WHERE d.commitment_id = ?
+WHERE d.commitment_id = %s
     """, (commitment_id,))
     rows = cursor.fetchall()
 
@@ -2271,7 +2277,7 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
         SELECT c.farmer_id
         FROM deliveries d
         JOIN commitments c ON d.commitment_id = c.id
-        WHERE d.id = ?
+        WHERE d.id = %s
     """, (delivery_id,))
     
     row = cursor.fetchone()
@@ -2284,7 +2290,7 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
         conn.close()
         raise HTTPException(403, "Not allowed")
 
-    cursor.execute("DELETE FROM deliveries WHERE id = ?", (delivery_id,))
+    cursor.execute("DELETE FROM deliveries WHERE id = %s", (delivery_id,))
     conn.commit()
     conn.close()
 
@@ -2354,7 +2360,7 @@ def register(name: str, email: str, password: str, role: str, admin_access_code:
     try:
         cursor.execute("""
             INSERT INTO users (name, email, password, role)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """, (name, email, hashed, role))
         conn.commit()
     except sqlite3.IntegrityError:
@@ -2371,7 +2377,7 @@ def login(email: str, password: str):
         cursor.execute("""
             SELECT id, password, role
             FROM users
-            WHERE email = ?
+            WHERE email = %s
         """, (email,))
         
         user = cursor.fetchone()
@@ -2484,11 +2490,11 @@ def risk_intelligence(user=Depends(require_admin)):
 
         for fid in farmers:
 
-            # ✅ READ FROM CACHE
+            #READ FROM CACHE
             cursor.execute("""
                 SELECT risk_score, risk_level
                 FROM farmer_risk_cache
-                WHERE farmer_id = ?
+                WHERE farmer_id = %s
             """, (fid,))
 
             row = cursor.fetchone()
@@ -2579,12 +2585,12 @@ def delete_own_account(user=Depends(get_current_user)):
         user_id = user["id"]
 
         # Delete everything tied to farmer
-        cursor.execute("DELETE FROM deliveries WHERE commitment_id IN (SELECT id FROM commitments WHERE farmer_id = ?)", (user_id,))
-        cursor.execute("DELETE FROM commitments WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM farmer_supply WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM decision_logs WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM farmer_trust WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        cursor.execute("DELETE FROM deliveries WHERE commitment_id IN (SELECT id FROM commitments WHERE farmer_id = %s)", (user_id,))
+        cursor.execute("DELETE FROM commitments WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM farmer_supply WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM decision_logs WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM farmer_trust WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
 
         conn.commit()
 
@@ -2611,7 +2617,7 @@ def delete_user(user_id: int, user=Depends(require_admin)):
         # -------------------------
         # Check user exists
         # -------------------------
-        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
         target = cursor.fetchone()
 
         if not target:
@@ -2638,15 +2644,15 @@ def delete_user(user_id: int, user=Depends(require_admin)):
         cursor.execute("""
             DELETE FROM deliveries
             WHERE commitment_id IN (
-                SELECT id FROM commitments WHERE farmer_id = ?
+                SELECT id FROM commitments WHERE farmer_id = %s
             )
         """, (user_id,))
 
-        cursor.execute("DELETE FROM commitments WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM farmer_supply WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM decision_logs WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM farmer_trust WHERE farmer_id = ?", (user_id,))
-        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        cursor.execute("DELETE FROM commitments WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM farmer_supply WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM decision_logs WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM farmer_trust WHERE farmer_id = %s", (user_id,))
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
 
         conn.commit()
 
@@ -2706,7 +2712,7 @@ GROUP BY c.farmer_id
         cursor.execute("""
     SELECT risk_score, risk_level
     FROM farmer_risk_cache
-    WHERE farmer_id = ?
+    WHERE farmer_id = %s
 """, (r["farmer_id"],))
         risk_row = cursor.fetchone()
 
@@ -2757,7 +2763,7 @@ def update_delivery(delivery_id: int, d: DeliveryUpdate, user=Depends(require_fa
             SELECT c.farmer_id, d.commitment_id
             FROM deliveries d
             JOIN commitments c ON d.commitment_id = c.id
-            WHERE d.id = ?
+            WHERE d.id = %s
         """, (delivery_id,))
         
         row = cursor.fetchone()
@@ -2771,8 +2777,8 @@ def update_delivery(delivery_id: int, d: DeliveryUpdate, user=Depends(require_fa
         # Update delivery
         cursor.execute("""
             UPDATE deliveries
-            SET delivered_qty = ?, week_start = ?, week_end = ?
-            WHERE id = ?
+            SET delivered_qty = %s, week_start = %s, week_end = %s
+            WHERE id = %s
         """, (
             d.delivered_qty,
             to_date(d.week_start).isoformat(),
@@ -2799,7 +2805,7 @@ def get_why(farmer_id: int, user=Depends(require_user)):
     cursor.execute("""
         SELECT crop, week, over_amount, explanation, created_at
         FROM decision_logs
-        WHERE farmer_id = ?
+        WHERE farmer_id = %s
         ORDER BY created_at DESC
         LIMIT 20
     """, (farmer_id,))
@@ -2854,7 +2860,7 @@ def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
         cursor.execute("""
             SELECT risk_score, risk_level
             FROM farmer_risk_cache
-            WHERE farmer_id = ?
+            WHERE farmer_id = %s
         """, (farmer_id,))
         row = cursor.fetchone()
 
@@ -2876,7 +2882,7 @@ def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
                 SUM(c.promised_qty) as total_promised
             FROM commitments c
             LEFT JOIN deliveries d ON d.commitment_id = c.id
-            WHERE c.farmer_id = ?
+            WHERE c.farmer_id = %s
         """, (farmer_id,))
         data = cursor.fetchone()
 
@@ -2908,6 +2914,25 @@ def debug_risk_cache():
         rows = cursor.fetchall()
 
         return [dict(row) for row in rows]
+
+    finally:
+        conn.close()
+
+@app.get("/debug/reset-db")
+def reset_db_debug():
+    conn, cursor = get_db()
+
+    try:
+        cursor.execute("DROP TABLE IF EXISTS deliveries CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS commitments CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS farmer_supply CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS decision_logs CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS farmer_trust CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS farmer_risk_cache CASCADE")
+        cursor.execute("DROP TABLE IF EXISTS users CASCADE")
+
+        conn.commit()
+        return {"message": "Database reset successful"}
 
     finally:
         conn.close()
