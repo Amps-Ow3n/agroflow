@@ -67,113 +67,98 @@ def get_db():
 # ======================================================
 def init_db():
     conn, cursor = get_db()
-# -------------------------
-# Users Table
-# -------------------------
+
+    # USERS
     cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    role TEXT CHECK(role IN ('farmer','admin')) NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
-    
-    # Farmer supply table
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT CHECK(role IN ('farmer','admin')) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # SUPPLY
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS farmer_supply (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        farmer_id INTEGER,
+        id SERIAL PRIMARY KEY,
+        farmer_id INTEGER REFERENCES users(id),
         crop TEXT,
         qty_min INTEGER,
         qty_max INTEGER,
         zone TEXT,
         available_from DATE,
         available_to DATE,
-        last_updated DATETIME,
-        FOREIGN KEY (farmer_id) REFERENCES users(id)
+        last_updated TIMESTAMP
     )
     """)
 
-    # Supplier commitment table
+    # COMMITMENTS
     cursor.execute("""
-CREATE TABLE IF NOT EXISTS commitments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    farmer_id INTEGER,
-    crop TEXT,
-    promised_qty INTEGER,
-    zone TEXT,
-    delivery_start DATE,
-    delivery_end DATE,
-    status TEXT DEFAULT 'PENDING',
-    created_at DATETIME,
-    last_updated DATETIME,
-    FOREIGN KEY (farmer_id) REFERENCES users(id)
-)
-""")
-    
-    cursor.execute("""
-CREATE TABLE IF NOT EXISTS decision_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    farmer_id INTEGER,
-    crop TEXT,
-    week TEXT,
-    over_amount INTEGER,
-    explanation TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
-    
-# -------------------------
-# Deliveries Table
-# -------------------------
-    cursor.execute("""
-CREATE TABLE IF NOT EXISTS deliveries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    commitment_id INTEGER,
-    delivered_qty INTEGER,
-    week_start DATE,
-    week_end DATE,
-    status TEXT,
-    logged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (commitment_id) REFERENCES commitments(id)
-)
-""")
-
-#  CHECK EXISTING COLUMNS FIRST
-    cursor.execute("PRAGMA table_info(deliveries)")
-    columns = [col[1] for col in cursor.fetchall()]
-
-    #  ADD COLUMN
-    if "weekly_promised_qty" not in columns:
-        cursor.execute("""
-        ALTER TABLE deliveries ADD COLUMN weekly_promised_qty REAL DEFAULT 0
+    CREATE TABLE IF NOT EXISTS commitments (
+        id SERIAL PRIMARY KEY,
+        farmer_id INTEGER REFERENCES users(id),
+        crop TEXT,
+        promised_qty INTEGER,
+        zone TEXT,
+        delivery_start DATE,
+        delivery_end DATE,
+        status TEXT DEFAULT 'PENDING',
+        created_at TIMESTAMP,
+        last_updated TIMESTAMP
+    )
     """)
-    
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS farmer_trust (
-    farmer_id INTEGER PRIMARY KEY,
-    score INTEGER DEFAULT 100,
-    total_deliveries INTEGER DEFAULT 0
-)
-""")
 
-    # -------------------------
-    # Farmer Risk Cache (NEW)
-    # -------------------------
+    # DELIVERIES
     cursor.execute("""
-CREATE TABLE IF NOT EXISTS farmer_risk_cache (
-    farmer_id INTEGER PRIMARY KEY,
-    risk_score REAL,
-    risk_level TEXT,
-    last_updated TEXT
-)
+    CREATE TABLE IF NOT EXISTS deliveries (
+        id SERIAL PRIMARY KEY,
+        commitment_id INTEGER REFERENCES commitments(id),
+        delivered_qty INTEGER,
+        week_start DATE,
+        week_end DATE,
+        status TEXT,
+        weekly_promised_qty REAL,
+        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     """)
+
+    # DECISION LOGS
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS decision_logs (
+        id SERIAL PRIMARY KEY,
+        farmer_id INTEGER,
+        crop TEXT,
+        week TEXT,
+        over_amount INTEGER,
+        explanation TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # TRUST
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS farmer_trust (
+        farmer_id INTEGER PRIMARY KEY,
+        score INTEGER DEFAULT 100,
+        total_deliveries INTEGER DEFAULT 0
+    )
+    """)
+
+    # RISK CACHE
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS farmer_risk_cache (
+        farmer_id INTEGER PRIMARY KEY,
+        risk_score REAL,
+        risk_level TEXT,
+        last_updated TIMESTAMP
+    )
+    """)
+
     conn.commit()
     conn.close()
-
 init_db()
 
 # ======================================================
