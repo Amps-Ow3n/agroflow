@@ -1438,12 +1438,13 @@ def recompute_all_risks():
 
             #STEP B: System-level overcommit logging
             cursor.execute("""
-                SELECT COALESCE(SUM(qty_max),0)
-                FROM farmer_supply
-                WHERE farmer_id = %s
-            """, (farmer_id,))
-            total_supply = cursor.fetchone()[0] or 0
+    SELECT COALESCE(SUM(qty_max),0) AS total_supply
+    FROM farmer_supply
+    WHERE farmer_id = %s
+""", (farmer_id,))
 
+            row = cursor.fetchone()
+            total_supply = row["total_supply"] or 0
             cursor.execute("""
                 SELECT crop, COALESCE(SUM(promised_qty),0) AS total
                 FROM commitments
@@ -1672,7 +1673,7 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
     qty_max = update.qty_max if update.qty_max is not None else qty_max
     af = update.available_from if update.available_from is not None else to_date(af)
     at = update.available_to if update.available_to is not None else to_date(at)
-    
+
     if qty_min > qty_max:
         raise HTTPException(400, "qty_min cannot exceed qty_max")
     if af > at:
