@@ -1661,13 +1661,18 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
         conn.close()
         raise HTTPException(404, "Supply not found")
 
-    crop, zone, qty_min, qty_max, af, at = row
+    crop = row["crop"]
+    zone = row["zone"]
+    qty_min = row["qty_min"]
+    qty_max = row["qty_max"]
+    af = row["available_from"]
+    at = row["available_to"]
 
     qty_min = update.qty_min if update.qty_min is not None else qty_min
     qty_max = update.qty_max if update.qty_max is not None else qty_max
-    af = update.available_from or af
-    at = update.available_to or at
-
+    af = update.available_from if update.available_from is not None else to_date(af)
+    at = update.available_to if update.available_to is not None else to_date(at)
+    
     if qty_min > qty_max:
         raise HTTPException(400, "qty_min cannot exceed qty_max")
     if af > at:
@@ -1760,10 +1765,9 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         total_capacity = 0
 
         for row in supply_rows:
-            qty_max, avail_from, avail_to = row
-            avail_from = to_date(avail_from)
-            avail_to = to_date(avail_to)
-
+            qty_max = row["qty_max"]
+            avail_from = to_date(row["available_from"])
+            avail_to = to_date(row["available_to"])
             if delivery_start >= avail_from and delivery_end <= avail_to:
                 valid_window = True
                 total_capacity += qty_max
@@ -1856,31 +1860,33 @@ def list_commitments(user=Depends(require_farmer)):
     List commitments for the current farmer only.
     """
     conn, cursor = get_db()
-    rows = cursor.execute("""
-        SELECT id, farmer_id, crop, promised_qty, zone,
-               delivery_start, delivery_end,
-               status, created_at, last_updated
-        FROM commitments
-        WHERE farmer_id=%s
-        ORDER BY created_at DESC
-    """, (user["id"],)).fetchall()
+    cursor.execute("""
+    SELECT id, farmer_id, crop, promised_qty, zone,
+           delivery_start, delivery_end,
+           status, created_at, last_updated
+    FROM commitments
+    WHERE farmer_id=%s
+    ORDER BY created_at DESC
+""", (user["id"],))
+
+    rows = cursor.fetchall()
     conn.close()
 
     return [
-        CommitmentOut(
-            id=r[0],
-            farmer_id=r[1],
-            crop=r[2],
-            promised_qty=r[3],
-            zone=r[4],
-            delivery_start=to_date(r[5]),
-            delivery_end=to_date(r[6]),
-            status=r[7],
-            created_at=to_datetime(r[8]),
-            last_updated=to_datetime(r[9]),
-        )
-        for r in rows
-    ]
+    CommitmentOut(
+        id=r["id"],
+        farmer_id=r["farmer_id"],
+        crop=r["crop"],
+        promised_qty=r["promised_qty"],
+        zone=r["zone"],
+        delivery_start=to_date(r["delivery_start"]),
+        delivery_end=to_date(r["delivery_end"]),
+        status=r["status"],
+        created_at=to_datetime(r["created_at"]),
+        last_updated=to_datetime(r["last_updated"]),
+    )
+    for r in rows
+]
 # ==================================================
 # UPDATE COMMITMENT
 # ==================================================
