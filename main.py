@@ -1616,7 +1616,8 @@ def list_supplies(
 
     query += " ORDER BY last_updated DESC"
 
-    rows = cursor.execute(query, params).fetchall()
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
     conn.close()
 
     results = []
