@@ -1506,18 +1506,20 @@ def create_supply(s: SupplyCreate, user=Depends(require_farmer)):
     # ------------------------------------
     # CHECK IF SAME SUPPLY ALREADY EXISTS
     # ------------------------------------
-    existing = cursor.execute("""
-        SELECT id, qty_min, qty_max
-        FROM farmer_supply
-        WHERE farmer_id=%s AND crop=%s AND zone=%s 
-        AND available_from=%s AND available_to=%s
-    """, (
-        user["id"],
-        crop,
-        s.zone,
-        s.available_from.isoformat(),
-        s.available_to.isoformat()
-    )).fetchone()
+    cursor.execute("""
+    SELECT id, qty_min, qty_max
+    FROM farmer_supply
+    WHERE farmer_id=%s AND crop=%s AND zone=%s
+    AND available_from=%s AND available_to=%s
+""", (
+    user["id"],
+    crop,
+    s.zone,
+    s.available_from,
+    s.available_to
+))
+
+    existing = cursor.fetchone()
 
     # ------------------------------------
     # MERGE IF EXISTS
@@ -1553,23 +1555,24 @@ def create_supply(s: SupplyCreate, user=Depends(require_farmer)):
     # INSERT NEW
     # ------------------------------------
     cursor.execute("""
-        INSERT INTO farmer_supply (
-            farmer_id, crop, qty_min, qty_max, zone,
-            available_from, available_to, last_updated
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        user["id"],
-        crop,
-        s.qty_min,
-        s.qty_max,
-        s.zone,
-        s.available_from.isoformat(),
-        s.available_to.isoformat(),
-        now
-    ))
+    INSERT INTO farmer_supply (
+        farmer_id, crop, qty_min, qty_max, zone,
+        available_from, available_to, last_updated
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id
+""", (
+    user["id"],
+    crop,
+    s.qty_min,
+    s.qty_max,
+    s.zone,
+    s.available_from,
+    s.available_to,
+    now
+))
 
-    supply_id = cursor.lastrowid
+    supply_id = cursor.fetchone()["id"]
     conn.commit()
     conn.close()
 
@@ -1620,19 +1623,19 @@ def list_supplies(
 
     for r in rows:
         try:
-            results.append(
-                SupplyOut(
-                    id=r[0],
-                    farmer_id=r[1],
-                    crop=r[2],
-                    qty_min=r[3],
-                    qty_max=r[4],
-                    zone=r[5],
-                    available_from=date.fromisoformat(r[6]),
-                    available_to=date.fromisoformat(r[7]),
-                    last_updated=datetime.fromisoformat(r[8])
-                )
-            )
+           results.append(
+    SupplyOut(
+        id=r["id"],
+        farmer_id=r["farmer_id"],
+        crop=r["crop"],
+        qty_min=r["qty_min"],
+        qty_max=r["qty_max"],
+        zone=r["zone"],
+        available_from=r["available_from"],
+        available_to=r["available_to"],
+        last_updated=r["last_updated"]
+    )
+)
         except Exception as e:
             print("Skipping bad row:", r, e)
 
@@ -1646,12 +1649,13 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
 
     conn, cursor = get_db()
 
-    row = cursor.execute("""
-        SELECT crop, zone, qty_min, qty_max, available_from, available_to
-        FROM farmer_supply
-        WHERE id=%s AND farmer_id=%s
-    """, (supply_id, user["id"])).fetchone()
+    cursor.execute("""
+    SELECT crop, zone, qty_min, qty_max, available_from, available_to
+    FROM farmer_supply
+    WHERE id=%s AND farmer_id=%s
+""", (supply_id, user["id"]))
 
+    row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(404, "Supply not found")
@@ -1660,8 +1664,8 @@ def update_supply(supply_id: int, update: SupplyUpdate, user=Depends(require_far
 
     qty_min = update.qty_min if update.qty_min is not None else qty_min
     qty_max = update.qty_max if update.qty_max is not None else qty_max
-    af = update.available_from or date.fromisoformat(af)
-    at = update.available_to or date.fromisoformat(at)
+    af = update.available_from or af
+    at = update.available_to or at
 
     if qty_min > qty_max:
         raise HTTPException(400, "qty_min cannot exceed qty_max")
@@ -1737,12 +1741,13 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
             raise HTTPException(400, f"Unsupported crop: {crop}")
 
         # ---- fetch supply ----
-        supply_rows = cursor.execute("""
+        cursor.execute("""
     SELECT qty_max, available_from, available_to
     FROM farmer_supply
     WHERE farmer_id=%s AND crop=%s AND zone=%s
-""", (user["id"], crop, cmt.zone)).fetchall()
+""", (user["id"], crop, cmt.zone))
 
+        supply_rows = cursor.fetchall()
         if not supply_rows:
             raise HTTPException(400, "No registered supply found for this crop and zone")
 
@@ -1765,12 +1770,13 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
         if not valid_window:
             raise HTTPException(400, "Delivery window must match at least one supply window")
         # ---- current commitments ----
-        row = cursor.execute("""
-            SELECT COALESCE(SUM(promised_qty),0) as total
-            FROM commitments
-            WHERE farmer_id=%s AND crop=%s AND zone=%s
-        """, (user["id"], crop, cmt.zone)).fetchone()
+        cursor.execute("""
+    SELECT COALESCE(SUM(promised_qty),0) as total
+    FROM commitments
+    WHERE farmer_id=%s AND crop=%s AND zone=%s
+""", (user["id"], crop, cmt.zone))
 
+        row = cursor.fetchone()
         current_commitments = row["total"] if row else 0
 
         # ---- detect overcommit (DO NOT BLOCK) ----
@@ -1780,26 +1786,26 @@ def create_commitment(cmt: CommitmentCreate, user=Depends(require_farmer)):
 
         # ---- insert commitment ----
         cursor.execute("""
-            INSERT INTO commitments (
-                farmer_id, crop, promised_qty, zone,
-                delivery_start, delivery_end,
-                status, created_at, last_updated
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            user["id"],
-            crop,
-            cmt.promised_qty,
-            cmt.zone,
-            cmt.delivery_start.isoformat(),
-            cmt.delivery_end.isoformat(),
-            "PENDING",
-            now_dt,
-            now_dt
-        ))
+    INSERT INTO commitments (
+        farmer_id, crop, promised_qty, zone,
+        delivery_start, delivery_end,
+        status, created_at, last_updated
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id
+""", (
+    user["id"],
+    crop,
+    cmt.promised_qty,
+    cmt.zone,
+    cmt.delivery_start,
+    cmt.delivery_end,
+    "PENDING",
+    now_dt,
+    now_dt
+))
 
-        commitment_id = cursor.lastrowid
-
+        commitment_id = cursor.fetchone()["id"]
         # ---- log overcommit ----
         if over_commit > 0:
             cursor.execute("""
@@ -1883,14 +1889,14 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     conn, cursor = get_db()
 
     # ---- get existing commitment ----
-    row = cursor.execute("""
+    cursor.execute("""
         SELECT crop, promised_qty, zone,
                delivery_start, delivery_end,
                status, created_at
         FROM commitments
         WHERE id=%s AND farmer_id=%s
     """, (commitment_id, user["id"])).fetchone()
-
+    row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(404, "Commitment not found")
@@ -1902,12 +1908,12 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     promised_qty = update.promised_qty if update.promised_qty is not None else current_qty
 
     # ---- fetch supply ----
-    supply_row = cursor.execute("""
+    cursor.execute("""
         SELECT qty_max, available_from, available_to
         FROM farmer_supply
         WHERE farmer_id=%s AND crop=%s AND zone=%s
     """, (user["id"], crop, zone)).fetchone()
-
+    supply_row = cursor.fetchone()
     if not supply_row:
         conn.close()
         raise HTTPException(400, "No registered supply found for this crop and zone")
@@ -1918,11 +1924,12 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
 
     # ---- validations ----
     # compute total capacity across matching supply windows
-    supply_rows = cursor.execute("""
+    cursor.execute("""
     SELECT qty_max
     FROM farmer_supply
     WHERE farmer_id=%s AND crop=%s AND zone=%s
 """, (user["id"], crop, zone)).fetchall()
+    supply_rows = cursor.fetchone()
 
     total_capacity = sum(r["qty_max"] for r in supply_rows)
 
@@ -2348,7 +2355,7 @@ def register(name: str, email: str, password: str, role: str, admin_access_code:
             VALUES (%s, %s, %s, %s)
         """, (name, email, hashed, role))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except Exception as e:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     return {"message": "User registered successfully"}
