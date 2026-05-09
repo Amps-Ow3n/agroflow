@@ -1903,7 +1903,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
                status, created_at
         FROM commitments
         WHERE id=%s AND farmer_id=%s
-    """, (commitment_id, user["id"])).fetchone()
+    """, (commitment_id, user["id"]))
     row = cursor.fetchone()
     if not row:
         conn.close()
@@ -1920,7 +1920,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
         SELECT qty_max, available_from, available_to
         FROM farmer_supply
         WHERE farmer_id=%s AND crop=%s AND zone=%s
-    """, (user["id"], crop, zone)).fetchone()
+    """, (user["id"], crop, zone))
     supply_row = cursor.fetchone()
     if not supply_row:
         conn.close()
@@ -1936,7 +1936,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     SELECT qty_max
     FROM farmer_supply
     WHERE farmer_id=%s AND crop=%s AND zone=%s
-""", (user["id"], crop, zone)).fetchall()
+""", (user["id"], crop, zone))
     supply_rows = cursor.fetchone()
 
     total_capacity = sum(r["qty_max"] for r in supply_rows)
