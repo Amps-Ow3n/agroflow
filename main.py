@@ -1279,16 +1279,26 @@ def compute_farmer_risk(cursor, farmer_id):
     over_amount_units = max(0, total_promised_all - total_supply)
 
     # -----------------------------
-    # SAVE TO CACHE (NEW)
+    # SAVE TO CACHE (POSTGRESQL FIX)
     # -----------------------------
     cursor.execute("""
-INSERT OR REPLACE INTO farmer_risk_cache (farmer_id, risk_score, risk_level, last_updated)
+INSERT INTO farmer_risk_cache (
+    farmer_id,
+    risk_score,
+    risk_level,
+    last_updated
+)
 VALUES (%s, %s, %s, %s)
+ON CONFLICT (farmer_id)
+DO UPDATE SET
+    risk_score = EXCLUDED.risk_score,
+    risk_level = EXCLUDED.risk_level,
+    last_updated = EXCLUDED.last_updated
 """, (
     farmer_id,
     round(risk_score, 2),
     level,
-    datetime.now().isoformat()
+    datetime.now()
 ))
     # -----------------------------
     # Final response
