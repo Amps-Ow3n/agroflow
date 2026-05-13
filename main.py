@@ -2293,29 +2293,25 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
 
     # Ensure ownership
     cursor.execute("""
-        SELECT c.farmer_id
-        FROM deliveries d
-        JOIN commitments c ON d.commitment_id = c.id
-        WHERE d.id = %s
-    """, (delivery_id,))
+    SELECT 
+        c.farmer_id,
+        d.commitment_id
+    FROM deliveries d
+    JOIN commitments c ON d.commitment_id = c.id
+    WHERE d.id = %s
+""", (delivery_id,))
     
     row = cursor.fetchone()
 
     if not row:
-        cursor.execute("""
-    SELECT commitment_id
-    FROM deliveries
-    WHERE id = %s
-""", (delivery_id,))
-
-        delivery_row = cursor.fetchone()
-        commitment_id = delivery_row["commitment_id"]
         conn.close()
         raise HTTPException(404, "Delivery not found")
 
     if row["farmer_id"] != user["id"]:
         conn.close()
         raise HTTPException(403, "Not allowed")
+        
+    commitment_id = row["commitment_id"]
 
     cursor.execute("DELETE FROM deliveries WHERE id = %s", (delivery_id,))
     # recompute totals
