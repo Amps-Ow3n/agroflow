@@ -1909,7 +1909,13 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
         conn.close()
         raise HTTPException(404, "Commitment not found")
 
-    crop, current_qty, zone, d_start, d_end, status, created_at = row
+    crop = row["crop"]
+    current_qty = row["promised_qty"]
+    zone = row["zone"]
+    d_start = row["delivery_start"]
+    d_end = row["delivery_end"]
+    status = row["status"]
+    created_at = row["created_at"]
 
     delivery_start = to_date(update.delivery_start) if update.delivery_start else to_date(d_start)
     delivery_end = to_date(update.delivery_end) if update.delivery_end else to_date(d_end)
@@ -1926,7 +1932,9 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
         conn.close()
         raise HTTPException(400, "No registered supply found for this crop and zone")
 
-    qty_max, avail_from, avail_to = supply_row
+    qty_max = supply_row["qty_max"]
+    avail_from = supply_row["available_from"]
+    avail_to = supply_row["available_to"]
     avail_from_date = to_date(avail_from)
     avail_to_date = to_date(avail_to)
 
@@ -1937,7 +1945,7 @@ def update_commitment(commitment_id: int, update: CommitmentUpdate, user=Depends
     FROM farmer_supply
     WHERE farmer_id=%s AND crop=%s AND zone=%s
 """, (user["id"], crop, zone))
-    supply_rows = cursor.fetchone()
+    supply_rows = cursor.fetchall()
 
     total_capacity = sum(r["qty_max"] for r in supply_rows)
 
@@ -2079,11 +2087,12 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
 
         from datetime import datetime
 
-        start = datetime.fromisoformat(dates["delivery_start"])
-        end = datetime.fromisoformat(dates["delivery_end"])
+        start = to_date(dates["delivery_start"])
+        end = to_date(dates["delivery_end"])
 
         days = (end - start).days + 1
-        num_weeks = max(1, days // 7)
+        import math
+        num_weeks = max(1, math.ceil(days / 7))
         weekly_promised_qty = promised_qty / num_weeks
         # Compute status ONLY for this delivery
         # TEMP status for individual entry (optional, not authoritative anymore)
@@ -2098,8 +2107,8 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
 """, (
     d.commitment_id,
     d.delivered_qty,
-    to_date(d.week_start).isoformat(),
-    to_date(d.week_end).isoformat(),
+    to_date(d.week_start),
+    to_date(d.week_end),
     status,
     weekly_promised_qty
 ))
@@ -2283,6 +2292,14 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
     row = cursor.fetchone()
 
     if not row:
+        cursor.execute("""
+    SELECT commitment_id
+    FROM deliveries
+    WHERE id = %s
+""", (delivery_id,))
+
+        delivery_row = cursor.fetchone()
+        commitment_id = delivery_row["commitment_id"]
         conn.close()
         raise HTTPException(404, "Delivery not found")
 
@@ -2291,6 +2308,38 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
         raise HTTPException(403, "Not allowed")
 
     cursor.execute("DELETE FROM deliveries WHERE id = %s", (delivery_id,))
+    # recompute totals
+    cursor.execute("""
+    SELECT promised_qty
+    FROM commitments
+    WHERE id = %s
+""", (commitment_id,))
+
+    commitment = cursor.fetchone()
+    promised_qty = commitment["promised_qty"]
+
+    cursor.execute("""
+    SELECT COALESCE(SUM(delivered_qty), 0) AS total
+    FROM deliveries
+    WHERE commitment_id = %s
+""", (commitment_id,))
+
+    total_delivered = cursor.fetchone()["total"]
+
+# determine status
+    if total_delivered >= promised_qty:
+        new_status = "COMPLETED"
+    elif total_delivered > 0:
+        new_status = "PARTIAL"
+    else:
+        new_status = "PENDING"
+
+# update commitment
+    cursor.execute("""
+    UPDATE commitments
+    SET status=%s, last_updated=CURRENT_TIMESTAMP
+    WHERE id=%s
+""", (new_status, commitment_id))
     conn.commit()
     conn.close()
 
