@@ -13,6 +13,9 @@ from fastapi import HTTPException
 from dotenv import load_dotenv
 from collections import defaultdict
 from fastapi import Query
+import psycopg2
+import os
+from psycopg2.extras import RealDictCursor
 
 # ======================================================
 # APP CONFIG
@@ -48,10 +51,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_FILE = BASE_DIR / "agroflow.db"
-
-import psycopg2
-import os
-from psycopg2.extras import RealDictCursor
 
 def get_db():
     db_url = os.getenv("DATABASE_URL")
@@ -377,7 +376,11 @@ def check_feasibility(farmer_id: int):
     "promised": round(promised, 2),
     "capacity": round(available, 2),
     "utilization": round(utilization, 2),
-    "message": f"Farmer promised {round(over_ratio * 100)}% more than capacity" if over_ratio > 0 else "Within capacity"
+    "message": (
+    f"Over capacity by {round(over_ratio * 100, 1)}% — requires reduction or rescheduling"
+    if over_ratio > 0
+    else "Within capacity limits — operationally feasible"
+)
 }
 
             if promised > available:
@@ -388,7 +391,10 @@ def check_feasibility(farmer_id: int):
     "capacity": round(available, 2),
     "over_by": round(promised - available, 2),
     "over_ratio": round(over_ratio, 2),
-    "message": f"Overcommitted by {round(over_ratio * 100)}% (exceeds capacity)"
+    "risk_signal": "LOW" if promised <= available else "HIGH",
+    "message": (
+    f"CRITICAL: Exceeds capacity by {round(over_ratio * 100, 1)}% — high default risk"
+)
 })
             else:
                 feasible.append({
@@ -397,6 +403,7 @@ def check_feasibility(farmer_id: int):
     "promised": round(promised, 2),
     "capacity": round(available, 2),
     "over_ratio": round(over_ratio, 2),
+    "risk_signal": "LOW" if promised <= available else "HIGH",
     "message": "Within capacity"
 })
         # Step 3: confidence
@@ -410,7 +417,7 @@ def check_feasibility(farmer_id: int):
            elif avg_util <= 1.0:
                 confidence = 65
            else:
-               confidence = 30  # overcommit penalty
+               confidence = max(20, 100 - (avg_util * 60))
         return {
             "farmer_id": farmer_id,
             "feasible_commitments": feasible,
@@ -626,7 +633,7 @@ def update_farmer_trust(farmer_id, delivery_status):
 # ==============================
 def generate_farmer_dashboard(conn, farmer_id):
     try:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # -----------------------------
         # SUPPLY SUMMARY
@@ -642,7 +649,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         supply_summary = [
             {
                 "crop": r["crop"],
-                "zone": r["zone"] if "zone" in r.keys() else "-",
+                "zone": r.get("zone") or "-",
                 "total_capacity": r["total_capacity"] or 0
             }
             for r in supply_rows
@@ -667,7 +674,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         commitment_summary = []
         for r in commitment_rows:
             crop = r["crop"]
-            zone = r["zone"] if "zone" in r.keys() else "-"
+            zone = r.get("zone") or "-"
             promised = r["total_committed"] or 0
             capacity = supply_map.get((crop, zone), 0)
 
@@ -717,7 +724,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         for r in delivery_rows:
             cid = r["commitment_id"]
             delivery_map[cid]["crop"] = r["crop"]
-            delivery_map[cid]["zone"] = r["zone"] if "zone" in r.keys() else "-"
+            delivery_map[cid]["zone"] = r.get("zone") or "-"
             delivery_map[cid]["promised"] = r["promised_qty"] or 0
             delivery_map[cid]["delivered"] += r["delivered_qty"] or 0
             delivery_map[cid]["start"] = to_date(r["delivery_start"])
@@ -2310,7 +2317,7 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
     if row["farmer_id"] != user["id"]:
         conn.close()
         raise HTTPException(403, "Not allowed")
-        
+
     commitment_id = row["commitment_id"]
 
     cursor.execute("DELETE FROM deliveries WHERE id = %s", (delivery_id,))
