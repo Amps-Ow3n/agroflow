@@ -2809,7 +2809,7 @@ GROUP BY c.farmer_id
     "reliability": round(completion * 100, 2),
     "risk_level": risk_level,
     "risk_score": risk_score,
-    "message": f"{risk_level} risk, {int(completion * 100)}% delivery success"
+    "message": f"Farmer is {risk_level} risk with {int(completion * 100)}% delivery success"
 })
     # -----------------------------
     # OVERCOMMITMENT
