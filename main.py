@@ -872,7 +872,7 @@ def generate_farmer_dashboard(conn, farmer_id):
         
 def generate_admin_dashboard(conn):
     try:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # -----------------------------
         # SUPPLY
@@ -889,7 +889,7 @@ def generate_admin_dashboard(conn):
             fid = r["farmer_id"]
             supply_summary.setdefault(fid, []).append({
                 "crop": r["crop"],
-                "zone": r["zone"],
+                "zone": r["zone"] or "-",
                 "total_capacity": r["total_capacity"] or 0
             })
 
@@ -960,7 +960,7 @@ def generate_admin_dashboard(conn):
             fid = r["farmer_id"]
 
             delivery_map[cid]["crop"] = r["crop"]
-            delivery_map[cid]["zone"] = r["zone"]
+            delivery_map[cid]["zone"] = r["zone"] or "-"
             delivery_map[cid]["promised"] = r["promised_qty"] or 0
             delivery_map[cid]["delivered"] += (r["delivered_qty"] or 0)
             delivery_map[cid]["start"] = to_date(r["delivery_start"])
@@ -2474,7 +2474,14 @@ def login(email: str, password: str):
 def admin_feasibility_summary(user=Depends(require_admin)):
     conn, cursor = get_db()
 
-    cursor.execute("SELECT DISTINCT farmer_id FROM commitments")
+    cursor.execute("""
+    SELECT DISTINCT farmer_id
+    FROM (
+        SELECT farmer_id FROM commitments
+        UNION
+        SELECT farmer_id FROM farmer_supply
+    ) x
+""")
     farmers = cursor.fetchall()
 
     total_farmers = len(farmers)
@@ -2560,19 +2567,24 @@ def risk_intelligence(user=Depends(require_admin)):
             """, (fid,))
 
             row = cursor.fetchone()
+            
+            risk = compute_farmer_risk(cursor, fid)
 
             if row:
-                risk = {
-                    "risk_score": row["risk_score"],
-                    "risk_level": row["risk_level"],
-                    "over_amount": 0,
-                    "main_crop": "unknown"
-                }
-            else:
-                risk = compute_farmer_risk(cursor, fid)
-
-            prediction = predict_failure(risk)
-
+                  risk = {
+        "risk_score": row["risk_score"] or 0,
+        "risk_level": row["risk_level"] or "LOW",
+        "over_amount": 0,
+        "main_crop": "unknown",
+        "delivery_failure_rate": 0,
+        "reliability_score": 100
+    }
+            try:
+               prediction = predict_failure(risk)
+            except Exception:
+               prediction = {
+        "failure_probability": 0
+    }
             results.append({
                 "farmer_id": fid,
                 "risk": risk,
@@ -2587,8 +2599,12 @@ def risk_intelligence(user=Depends(require_admin)):
 
         # INTERVENTIONS
         for r in results:
-            r["intervention"] = generate_intervention(r["risk"], results)
-
+            try:
+               r["intervention"] = generate_intervention(r["risk"], results)
+            except Exception:
+               r["intervention"] = {
+        "actions": []
+    }
         # BUILD RESPONSE
         risk_alerts = []
         farmer_risk_ranking = []
