@@ -16,7 +16,10 @@ from fastapi import Query
 import psycopg2
 import os
 from psycopg2.extras import RealDictCursor
-
+from mappers.supply_mapper import map_to_supply
+from mappers.commitment_mapper import map_to_commitment
+from mappers.delivery_mapper import map_to_delivery
+from mappers.intelligence_mapper import map_to_intelligence
 # ======================================================
 # APP CONFIG
 # ======================================================
@@ -74,7 +77,7 @@ def init_db():
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        role TEXT CHECK(role IN ('farmer','admin')) NOT NULL,
+        role TEXT CHECK(role IN ('farmer','buyer','admin')) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -112,18 +115,35 @@ def init_db():
 
     # DELIVERIES
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS deliveries (
-        id SERIAL PRIMARY KEY,
-        commitment_id INTEGER REFERENCES commitments(id),
-        delivered_qty INTEGER,
-        week_start DATE,
-        week_end DATE,
-        status TEXT,
-        weekly_promised_qty REAL,
-        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
+CREATE TABLE IF NOT EXISTS deliveries (
 
+    id SERIAL PRIMARY KEY,
+
+    commitment_id INTEGER REFERENCES commitments(id),
+
+    delivered_qty INTEGER,
+
+    week_start DATE,
+    week_end DATE,
+
+    status TEXT,
+
+    verification_status TEXT DEFAULT 'PENDING',
+
+    confidence_score REAL DEFAULT 0,
+
+    verification_notes TEXT,
+
+    verified_by INTEGER REFERENCES users(id),
+
+    verified_at TIMESTAMP,
+
+    weekly_promised_qty REAL,
+
+    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+    
     # DECISION LOGS
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS decision_logs (
@@ -152,6 +172,7 @@ def init_db():
         farmer_id INTEGER PRIMARY KEY,
         risk_score REAL,
         risk_level TEXT,
+        explanation TEXT,
         last_updated TIMESTAMP
     )
     """)
@@ -223,6 +244,9 @@ class DeliveryUpdate(BaseModel):
     week_start: date
     week_end: date
 
+class DeliveryVerification(BaseModel):
+    verification_status: str
+    verification_notes: Optional[str] = None
 # ======================================================
 # HELPER FUNCTIONS
 # ======================================================
@@ -247,6 +271,11 @@ def require_farmer(user=Depends(require_user)):
 def require_admin(user=Depends(require_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
+    return user
+
+def require_buyer(user=Depends(require_user)):
+    if user["role"] != "buyer":
+        raise HTTPException(status_code=403, detail="Buyers only")
     return user
 
 def get_weeks_between(start_date, end_date):
@@ -427,7 +456,7 @@ def check_feasibility(farmer_id: int):
         }
 
     finally:
-        conn.close()
+        conn.close() 
 
 # -----------------------------------
 # Compute delivery status
@@ -577,500 +606,752 @@ def count_missed(deliveries):
 # -----------------------------------
 # Farmer Reliability Score Engine
 # -----------------------------------
-
-def update_farmer_trust(farmer_id, delivery_status):
+def update_farmer_trust(
+    farmer_id,
+    verification_status,
+    confidence_score=1.0
+):
 
     conn, cursor = get_db()
 
-    cursor.execute("""
-        SELECT score, total_deliveries
-        FROM farmer_trust
-        WHERE farmer_id = %s
-    """, (farmer_id,))
-
-    row = cursor.fetchone()
-
-    if not row:
-
-        score = 100
-        total = 0
+    try:
 
         cursor.execute("""
-            INSERT INTO farmer_trust (farmer_id, score, total_deliveries)
-            VALUES (%s, %s, %s)
-        """, (farmer_id, score, total))
+            SELECT score, total_deliveries
+            FROM farmer_trust
+            WHERE farmer_id = %s
+        """, (farmer_id,))
 
-    else:
-        score = row["score"]
-        total = row["total_deliveries"]
+        row = cursor.fetchone()
 
-    # -----------------------
-    # Update score logic
-    # -----------------------
+        # -----------------------------
+        # Create initial trust profile
+        # -----------------------------
+        if not row:
 
-    if delivery_status == "COMPLETED":
-        score = min(100, score + 1)
+            score = 80
+            total = 0
 
-    elif delivery_status == "PARTIAL":
-        score = max(0, score - 3)
+            cursor.execute("""
+                INSERT INTO farmer_trust (
+                    farmer_id,
+                    score,
+                    total_deliveries
+                )
+                VALUES (%s, %s, %s)
+            """, (
+                farmer_id,
+                score,
+                total
+            ))
 
-    elif delivery_status == "MISSED":
-        score = max(0, score - 8)
+        else:
+            score = row["score"]
+            total = row["total_deliveries"]
 
-    total += 1
+        # -----------------------------
+        # TRUST UPDATE LOGIC
+        # -----------------------------
+        if verification_status == "VERIFIED":
 
-    cursor.execute("""
-        UPDATE farmer_trust
-        SET score = %s, total_deliveries = %s
-        WHERE farmer_id = %s
-    """, (score, total, farmer_id))
+            score += 1.5 * confidence_score
 
-    conn.commit()
-    conn.close()
+        elif verification_status == "PARTIAL":
+
+            score -= 1.5 * (1 - confidence_score)
+
+        elif verification_status == "REJECTED":
+
+            score -= 4
+
+        # Clamp score
+        score = max(0, min(100, score))
+
+        total += 1
+
+        # -----------------------------
+        # SAVE
+        # -----------------------------
+        cursor.execute("""
+            UPDATE farmer_trust
+            SET
+                score = %s,
+                total_deliveries = %s
+            WHERE farmer_id = %s
+        """, (
+            score,
+            total,
+            farmer_id
+        ))
+
+        conn.commit()
+
+    except Exception as e:
+
+        print("Trust update error:", e)
+
+    finally:
+        conn.close()
+# ==================================================
+# VERIFICATION CONFIDENCE ENGINE
+# ==================================================
+def compute_confidence_score(verification_status):
+
+    if verification_status == "VERIFIED":
+        return 1.0
+
+    elif verification_status == "PARTIAL":
+        return 0.5
+
+    elif verification_status == "REJECTED":
+        return 0.0
+
+    return 0.0
 
 # ==============================
-# 4. FARMER DASHBOARD ENGINE
+# FARMER DASHBOARD ENGINE
 # ==============================
 def generate_farmer_dashboard(conn, farmer_id):
+
     try:
+
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # -----------------------------
-        # SUPPLY SUMMARY
-        # -----------------------------
+        # =====================================================
+        # 1. SUPPLY SUMMARY
+        # =====================================================
         cursor.execute("""
-            SELECT crop, zone, SUM(qty_max) AS total_capacity
+            SELECT
+                crop,
+                COALESCE(zone, '-') as zone,
+                SUM(qty_max) as total_capacity
             FROM farmer_supply
             WHERE farmer_id = %s
             GROUP BY crop, zone
+            ORDER BY crop
         """, (farmer_id,))
-        supply_rows = cursor.fetchall()
 
-        supply_summary = [
-            {
-                "crop": r["crop"],
-                "zone": r.get("zone") or "-",
-                "total_capacity": r["total_capacity"] or 0
-            }
-            for r in supply_rows
-        ]
+        supply_summary = cursor.fetchall()
 
         supply_map = {
             (s["crop"], s["zone"]): s["total_capacity"]
             for s in supply_summary
         }
 
-        # -----------------------------
-        # COMMITMENT SUMMARY
-        # -----------------------------
+        # =====================================================
+        # 2. COMMITMENT SUMMARY
+        # =====================================================
         cursor.execute("""
-            SELECT crop, zone, SUM(promised_qty) AS total_committed
+            SELECT
+                id,
+                crop,
+                COALESCE(zone, '-') as zone,
+                promised_qty,
+                delivery_start,
+                delivery_end,
+                status
             FROM commitments
-            WHERE farmer_id = %s
-            GROUP BY crop, zone
-        """, (farmer_id,))
-        commitment_rows = cursor.fetchall()
-
-        commitment_summary = []
-        for r in commitment_rows:
-            crop = r["crop"]
-            zone = r.get("zone") or "-"
-            promised = r["total_committed"] or 0
-            capacity = supply_map.get((crop, zone), 0)
-
-            utilization = (promised / capacity) if capacity > 0 else 0
-
-            commitment_summary.append({
-                "crop": crop,
-                "zone": zone,
-                "total_promised": promised,
-                "total_capacity": capacity,
-                "utilization": round(utilization * 100, 2)
-            })
-
-        # -----------------------------
-        # DELIVERY HISTORY
-        # -----------------------------
-        cursor.execute("""
-            SELECT 
-                c.id as commitment_id,
-                c.crop,
-                c.zone,
-                c.promised_qty,
-                c.delivery_start,
-                c.delivery_end,
-                d.delivered_qty
-            FROM commitments c
-            LEFT JOIN (
-                SELECT commitment_id, SUM(delivered_qty) as delivered_qty
-                FROM deliveries
-                GROUP BY commitment_id
-            ) d ON d.commitment_id = c.id
-            WHERE c.farmer_id = %s
-        """, (farmer_id,))
-        delivery_rows = cursor.fetchall()
-
-        from collections import defaultdict
-
-        delivery_map = defaultdict(lambda: {
-            "crop": "",
-            "zone": "-",
-            "promised": 0,
-            "delivered": 0,
-            "start": None,
-            "end": None
-        })
-
-        for r in delivery_rows:
-            cid = r["commitment_id"]
-            delivery_map[cid]["crop"] = r["crop"]
-            delivery_map[cid]["zone"] = r.get("zone") or "-"
-            delivery_map[cid]["promised"] = r["promised_qty"] or 0
-            delivery_map[cid]["delivered"] += r["delivered_qty"] or 0
-            delivery_map[cid]["start"] = to_date(r["delivery_start"])
-            delivery_map[cid]["end"] = to_date(r["delivery_end"])
-
-        delivery_history = []
-        total_delivered = 0
-        total_missed = 0
-
-        for cid, d in delivery_map.items():
-            delivered = min(d["delivered"], d["promised"])
-            promised = d["promised"]
-
-            status, reason = compute_delivery_status_with_reason(delivered, promised)
-
-            total_delivered += delivered
-            total_missed += max(promised - delivered, 0)
-
-            num_weeks = 1
-            if d["start"] and d["end"]:
-                try:
-                    weeks = get_weeks_between(d["start"], d["end"])
-                    if weeks and len(weeks) <= 100:
-                        num_weeks = len(weeks)
-                except:
-                    num_weeks = 1
-
-            delivery_history.append({
-                "id": cid,
-                "crop": d["crop"],
-                "zone": d["zone"],
-                "delivered_qty": delivered,
-                "week_start": d["start"],
-                "week_end": d["end"],
-                "weekly_promised_qty": round(promised / num_weeks, 2),
-                "why": reason,
-                "status": status
-            })
-
-        # -----------------------------
-        # RELIABILITY
-        # -----------------------------
-        total_promised = sum(c["total_promised"] for c in commitment_summary)
-        completion_rate = (total_delivered / total_promised) if total_promised > 0 else 0
-        reliability = round(completion_rate * 100, 2)
-
-        # -----------------------------
-        # RISK ALERTS
-        # -----------------------------
-        risk_alerts = []
-
-        cursor.execute("""
-            SELECT crop, over_amount
-            FROM decision_logs
-            WHERE farmer_id = %s
-        """, (farmer_id,))
-        for r in cursor.fetchall():
-            over_amount = r["over_amount"] or 0
-            if over_amount > 0:
-                risk_alerts.append({
-                    "severity": min(10, over_amount / 100),
-                    "message": f"{r['crop']} overcommitment by {over_amount} units"
-                })
-
-        for d in delivery_history:
-            if d["status"] == "FAILED":
-                risk_alerts.append({"severity": 8, "message": f"{d['crop']} delivery failed"})
-            elif d["status"] == "PARTIAL":
-                risk_alerts.append({"severity": 5, "message": f"{d['crop']} partially delivered"})
-
-        # -----------------------------
-        # DECISION INTELLIGENCE
-        # -----------------------------
-        decision_intelligence = []
-
-        cursor.execute("""
-            SELECT crop, explanation
-            FROM decision_logs
             WHERE farmer_id = %s
             ORDER BY id DESC
         """, (farmer_id,))
-        rows = cursor.fetchall()
 
-        decision_map = {}
-        for r in rows:
-            crop = r["crop"]
-            if crop not in decision_map:
-                decision_map[crop] = r["explanation"]
-
-        for item in commitment_summary:
-            crop = item["crop"]
-            zone = item.get("zone", "-")
-            if crop in decision_map:
-                decision_intelligence.append({
-                    "crop": crop,
-                    "zone": zone,
-                    "why": decision_map[crop]
-                })
-
-        # -----------------------------
-        # RISK (CACHE FIRST)
-        # -----------------------------
-        cursor.execute("""
-            SELECT risk_score, risk_level
-            FROM farmer_risk_cache
-            WHERE farmer_id = %s
-        """, (farmer_id,))
-        row = cursor.fetchone()
-
-        if row:
-            risk_summary = {
-                "risk_score": row["risk_score"],
-                "risk_level": row["risk_level"]
-            }
-        else:
-            risk = compute_farmer_risk(cursor, farmer_id)
-            risk_summary = {
-                "risk_score": risk["risk_score"],
-                "risk_level": risk["risk_level"]
-            }
-
-        # -----------------------------
-        # FINAL RESPONSE
-        # -----------------------------
-        return {
-            "supply_summary": supply_summary,
-            "commitment_summary": commitment_summary,
-            "delivery_history": delivery_history,
-            "delivery_performance": {
-                "completionRate": reliability,
-                "missedDeliveries": total_missed
-            },
-            "risk_alerts": risk_alerts,
-            "risk_summary": risk_summary,
-            "reliability_scores": {
-                "score": reliability,
-                "based_on": "quantity"
-            },
-            "decision_intelligence": decision_intelligence
-        }
-
-    except Exception as e:
-        print("Error generating farmer dashboard:", e)
-        return {"error": str(e)}
-        
-def generate_admin_dashboard(conn):
-    try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-        # -----------------------------
-        # SUPPLY
-        # -----------------------------
-        cursor.execute("""
-            SELECT farmer_id, crop, zone, SUM(qty_max) AS total_capacity
-            FROM farmer_supply
-            GROUP BY farmer_id, crop, zone
-        """)
-        supply_rows = cursor.fetchall()
-
-        supply_summary = {}
-        for r in supply_rows:
-            fid = r["farmer_id"]
-            supply_summary.setdefault(fid, []).append({
-                "crop": r["crop"],
-                "zone": r["zone"] or "-",
-                "total_capacity": r["total_capacity"] or 0
-            })
-
-        # -----------------------------
-        # COMMITMENTS
-        # -----------------------------
-        cursor.execute("""
-            SELECT farmer_id, crop, zone, SUM(promised_qty) AS total_committed
-            FROM commitments
-            GROUP BY farmer_id, crop, zone
-        """)
         commitment_rows = cursor.fetchall()
 
-        commitment_summary = {}
+        commitment_summary = []
+
+        total_promised = 0
+
         for r in commitment_rows:
-            fid = r["farmer_id"]
+
             crop = r["crop"]
             zone = r["zone"]
-            promised = r["total_committed"] or 0
 
-            capacity = 0
-            for s in supply_summary.get(fid, []):
-                if s["crop"] == crop and s["zone"] == zone:
-                    capacity = s["total_capacity"]
+            promised = r["promised_qty"] or 0
+            capacity = supply_map.get((crop, zone), 0)
 
-            utilization = (promised / capacity) if capacity > 0 else 0
+            utilization = (
+                (promised / capacity) * 100
+                if capacity > 0 else 0
+            )
 
-            commitment_summary.setdefault(fid, []).append({
+            total_promised += promised
+
+            commitment_summary.append({
+                "commitment_id": r["id"],
                 "crop": crop,
                 "zone": zone,
-                "total_promised": promised,
-                "total_capacity": capacity,
-                "utilization": round(utilization * 100, 2)
+                "promised_qty": promised,
+                "capacity": capacity,
+                "utilization_percent": round(utilization, 2),
+                "delivery_start": r["delivery_start"],
+                "delivery_end": r["delivery_end"],
+                "status": r["status"]
             })
 
-        # -----------------------------
-        # DELIVERY HISTORY (AGGREGATED)
-        # -----------------------------
+        # =====================================================
+        # 3. DELIVERY PERFORMANCE
+        # =====================================================
         cursor.execute("""
-            SELECT 
+            SELECT
                 c.id as commitment_id,
-                c.farmer_id,
+                c.crop,
+                COALESCE(c.zone, '-') as zone,
+                c.promised_qty,
+
+                COALESCE(SUM(d.delivered_qty), 0) as reported_qty,
+
+                COALESCE(SUM(
+                    CASE
+                        WHEN d.verification_status IN ('VERIFIED', 'PARTIAL')
+                        THEN d.delivered_qty
+                        ELSE 0
+                    END
+                ), 0) as verified_qty,
+
+                COALESCE(MAX(d.verification_status), 'PENDING')
+                as verification_status
+
+            FROM commitments c
+
+            LEFT JOIN deliveries d
+            ON d.commitment_id = c.id
+
+            WHERE c.farmer_id = %s
+
+            GROUP BY
+                c.id,
                 c.crop,
                 c.zone,
-                c.promised_qty,
-                c.delivery_start,
-                c.delivery_end,
-                d.delivered_qty
-            FROM commitments c
-            LEFT JOIN deliveries d ON d.commitment_id = c.id
-        """)
+                c.promised_qty
+
+            ORDER BY c.id DESC
+        """, (farmer_id,))
+
         delivery_rows = cursor.fetchall()
 
-        from collections import defaultdict
+        delivery_history = []
 
-        delivery_map = defaultdict(lambda: {
-            "crop": "",
-            "zone": "",
-            "promised": 0,
-            "delivered": 0,
-            "start": None,
-            "end": None,
-            "farmer_id": None
-        })
+        total_reported = 0
+        total_verified = 0
+        total_missed = 0
 
         for r in delivery_rows:
-            cid = r["commitment_id"]
-            fid = r["farmer_id"]
 
-            delivery_map[cid]["crop"] = r["crop"]
-            delivery_map[cid]["zone"] = r["zone"] or "-"
-            delivery_map[cid]["promised"] = r["promised_qty"] or 0
-            delivery_map[cid]["delivered"] += (r["delivered_qty"] or 0)
-            delivery_map[cid]["start"] = to_date(r["delivery_start"])
-            delivery_map[cid]["end"] = to_date(r["delivery_end"])
-            delivery_map[cid]["farmer_id"] = fid
+            promised = r["promised_qty"] or 0
 
-        delivery_history = {}
-        total_delivered_by_farmer = {}
-        total_missed_by_farmer = {}
+            reported_qty = min(
+                r["reported_qty"] or 0,
+                promised
+            )
 
-        for cid, d in delivery_map.items():
-            fid = d["farmer_id"]
+            verified_qty = min(
+                r["verified_qty"] or 0,
+                promised
+            )
 
-            delivered = min(d["delivered"], d["promised"])
-            promised = d["promised"]
+            total_reported += reported_qty
+            total_verified += verified_qty
 
-            status, reason = compute_delivery_status_with_reason(delivered, promised)
+            missed_qty = max(promised - verified_qty, 0)
 
-            delivery_history.setdefault(fid, []).append({
-                "id": cid,
-                "crop": d["crop"],
-                "zone": d["zone"],
-                "delivered_qty": delivered,
-                "week_start": d["start"],
-                "week_end": d["end"],
-                "why": reason,
-                "status": status
+            total_missed += missed_qty
+
+            reported_status, reported_reason = \
+                compute_delivery_status_with_reason(
+                    reported_qty,
+                    promised
+                )
+
+            verified_status, verified_reason = \
+                compute_delivery_status_with_reason(
+                    verified_qty,
+                    promised
+                )
+
+            delivery_history.append({
+
+                "commitment_id": r["commitment_id"],
+
+                "crop": r["crop"],
+
+                "zone": r["zone"],
+
+                "promised_qty": promised,
+
+                "verification_status": r["verification_status"],
+
+                # --------------------------------
+                # REPORTED
+                # --------------------------------
+                "reported_delivery": {
+                    "qty": reported_qty,
+                    "status": reported_status,
+                    "reason": reported_reason
+                },
+
+                # --------------------------------
+                # VERIFIED
+                # --------------------------------
+                "verified_delivery": {
+                    "qty": verified_qty,
+                    "status": verified_status,
+                    "reason": verified_reason
+                },
+
+                # --------------------------------
+                # GAP
+                # --------------------------------
+                "verification_gap": max(
+                    reported_qty - verified_qty,
+                    0
+                )
             })
 
-            total_delivered_by_farmer[fid] = total_delivered_by_farmer.get(fid, 0) + delivered
-            total_missed_by_farmer[fid] = total_missed_by_farmer.get(fid, 0) + max(promised - delivered, 0)
+        # =====================================================
+        # 4. TRUST SCORE
+        # =====================================================
+        cursor.execute("""
+            SELECT score
+            FROM farmer_trust
+            WHERE farmer_id = %s
+        """, (farmer_id,))
 
-        # -----------------------------
-        # RELIABILITY
-        # -----------------------------
-        reliability_scores = {}
-        for fid, commitments in commitment_summary.items():
-            total_promised = sum(c["total_promised"] for c in commitments)
-            delivered = total_delivered_by_farmer.get(fid, 0)
-            completion_rate = (delivered / total_promised) if total_promised > 0 else 0
-            reliability_scores[fid] = round(completion_rate * 100, 2)
+        trust_row = cursor.fetchone()
 
-        # -----------------------------
-        # RISK ALERTS (FIXED OVERCOMMITMENT)
-        # -----------------------------
-        risk_alerts = {}
-
-        for fid, commitments in commitment_summary.items():
-            total_supply = sum(s["total_capacity"] for s in supply_summary.get(fid, []))
-            total_promised = sum(c["total_promised"] for c in commitments)
-
-            if total_supply > 0 and total_promised > total_supply:
-                over = total_promised - total_supply
-                ratio = over / total_supply
-
-                risk_alerts.setdefault(fid, []).append({
-                    "severity": min(10, ratio * 10),
-                    "message": f"Overcommitment by {int(over)} units"
-                })
-
-        for fid, deliveries in delivery_history.items():
-            for d in deliveries:
-                if d["status"] == "FAILED":
-                    risk_alerts.setdefault(fid, []).append({
-                        "severity": 8,
-                        "message": f"{d['crop']} delivery failed"
-                    })
-                elif d["status"] == "PARTIAL":
-                    risk_alerts.setdefault(fid, []).append({
-                        "severity": 5,
-                        "message": f"{d['crop']} partially delivered"
-                    })
-
-        # -----------------------------
-        # FINAL RESPONSE
-        # -----------------------------
-        total_promised = sum(
-            sum(c["total_promised"] for c in cs)
-            for cs in commitment_summary.values()
+        trust_score = (
+            trust_row["score"]
+            if trust_row else 100
         )
 
-        total_delivered = sum(total_delivered_by_farmer.values())
-        total_missed = sum(total_missed_by_farmer.values())
+        if trust_score >= 80:
+            trust_label = "RELIABLE"
 
-        completion_rate = (total_delivered / total_promised) if total_promised > 0 else 0
+        elif trust_score >= 50:
+            trust_label = "MODERATE"
 
-        all_risks = []
-        for alerts in risk_alerts.values():
-            all_risks.extend(alerts)
+        else:
+            trust_label = "RISKY"
 
+        # =====================================================
+        # 5. PERFORMANCE METRICS
+        # =====================================================
+        reported_rate = (
+            (total_reported / total_promised) * 100
+            if total_promised > 0 else 0
+        )
+
+        verified_rate = (
+            (total_verified / total_promised) * 100
+            if total_promised > 0 else 0
+        )
+
+        # =====================================================
+        # 6. RISK ENGINE
+        # =====================================================
+        risk_summary = compute_farmer_risk_v2(
+            cursor,
+            farmer_id
+        )
+
+        # =====================================================
+        # 7. RISK ALERTS
+        # =====================================================
+        risk_alerts = []
+
+        for explanation in risk_summary.get("explanation", []):
+
+            risk_alerts.append({
+                "message": explanation,
+                "risk_level": risk_summary["risk_level"]
+            })
+
+        # =====================================================
+        # FINAL RESPONSE
+        # =====================================================
         return {
-            "supply_summary": [s for v in supply_summary.values() for s in v],
-            "commitment_summary": [c for v in commitment_summary.values() for c in v],
-            "delivery_performance": {
-                "completionRate": round(completion_rate * 100, 2),
-                "missedDeliveries": total_missed
+
+            # --------------------------------
+            # SUPPLY
+            # --------------------------------
+            "supply_summary": supply_summary,
+
+            # --------------------------------
+            # COMMITMENTS
+            # --------------------------------
+            "commitment_summary": commitment_summary,
+
+            # --------------------------------
+            # DELIVERIES
+            # --------------------------------
+            "delivery_history": delivery_history,
+
+            # --------------------------------
+            # REPORTED PERFORMANCE
+            # --------------------------------
+            "reported_performance": {
+                "completion_rate": round(reported_rate, 2),
+                "total_reported_qty": total_reported
             },
-            "risk_alerts": all_risks,
-            "reliability_scores": [
-                {"farmer_id": fid, "score": score}
-                for fid, score in reliability_scores.items()
-            ],
-            "total_promised": total_promised,
-            "total_delivered": total_delivered
+
+            # --------------------------------
+            # VERIFIED PERFORMANCE
+            # --------------------------------
+            "verified_performance": {
+                "completion_rate": round(verified_rate, 2),
+                "total_verified_qty": total_verified,
+                "missed_qty": total_missed
+            },
+
+            # --------------------------------
+            # TRUST
+            # --------------------------------
+            "trust_score": {
+                "score": trust_score,
+                "label": trust_label
+            },
+
+            # --------------------------------
+            # RISK
+            # --------------------------------
+            "risk_summary": risk_summary,
+
+            "risk_alerts": risk_alerts
         }
 
     except Exception as e:
+
+        print("Error generating farmer dashboard:", e)
+
+        return {
+            "error": str(e)
+        }
+
+# ==============================
+# ADMIN DASHBOARD ENGINE V2
+# ==============================
+def generate_admin_dashboard(conn):
+
+    try:
+
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # =====================================================
+        # 1. PLATFORM TOTALS
+        # =====================================================
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_commitments,
+                COALESCE(SUM(promised_qty), 0) as total_promised
+            FROM commitments
+        """)
+
+        totals = cursor.fetchone()
+
+        total_commitments = totals["total_commitments"] or 0
+        total_promised = totals["total_promised"] or 0
+
+        # =====================================================
+        # 2. VERIFIED DELIVERY TOTALS
+        # =====================================================
+        cursor.execute("""
+            SELECT
+
+                COALESCE(SUM(d.delivered_qty), 0) as total_reported,
+
+                COALESCE(SUM(
+                    CASE
+                        WHEN d.verification_status IN ('VERIFIED', 'PARTIAL')
+                        THEN d.delivered_qty
+                        ELSE 0
+                    END
+                ), 0) as total_verified,
+
+                COUNT(*) FILTER (
+                    WHERE d.verification_status = 'REJECTED'
+                ) as rejected_count,
+
+                COUNT(*) FILTER (
+                    WHERE d.verification_status = 'VERIFIED'
+                ) as verified_count
+
+            FROM deliveries d
+        """)
+
+        delivery_totals = cursor.fetchone()
+
+        total_reported = delivery_totals["total_reported"] or 0
+        total_verified = delivery_totals["total_verified"] or 0
+
+        rejected_count = delivery_totals["rejected_count"] or 0
+        verified_count = delivery_totals["verified_count"] or 0
+
+        # =====================================================
+        # 3. PLATFORM VERIFICATION RATE
+        # =====================================================
+        verification_rate = 0
+
+        total_verifications = verified_count + rejected_count
+
+        if total_verifications > 0:
+            verification_rate = (
+                verified_count / total_verifications
+            ) * 100
+
+        # =====================================================
+        # 4. PLATFORM COMPLETION RATE
+        # =====================================================
+        completion_rate = 0
+
+        if total_promised > 0:
+            completion_rate = (
+                total_verified / total_promised
+            ) * 100
+
+        # =====================================================
+        # 5. FARMER RISK OVERVIEW
+        # =====================================================
+        cursor.execute("""
+            SELECT
+                frc.farmer_id,
+                u.name,
+                frc.risk_score,
+                frc.risk_level,
+                frc.explanation,
+                ft.score as trust_score
+
+            FROM farmer_risk_cache frc
+
+            LEFT JOIN users u
+            ON frc.farmer_id = u.id
+
+            LEFT JOIN farmer_trust ft
+            ON frc.farmer_id = ft.farmer_id
+
+            ORDER BY frc.risk_score DESC
+        """)
+
+        risk_rows = cursor.fetchall()
+
+        farmers = []
+
+        total_risk_score = 0
+
+        for r in risk_rows:
+
+            risk_score = r["risk_score"] or 0
+            trust_score = r["trust_score"] or 100
+
+            total_risk_score += risk_score
+
+            # -----------------------------
+            # TRUST LABEL
+            # -----------------------------
+            if trust_score >= 80:
+                trust_label = "HIGH"
+
+            elif trust_score >= 50:
+                trust_label = "MEDIUM"
+
+            else:
+                trust_label = "LOW"
+
+            farmers.append({
+
+                "farmer_id": r["farmer_id"],
+
+                "farmer_name": r["name"],
+
+                "risk_score": round(risk_score, 2),
+
+                "risk_level": r["risk_level"],
+
+                "trust_score": trust_score,
+
+                "trust_label": trust_label,
+
+                "risk_explanation": r["explanation"]
+            })
+
+        # =====================================================
+        # 6. SYSTEM RISK OVERVIEW
+        # =====================================================
+        avg_platform_risk = 0
+
+        if len(farmers) > 0:
+            avg_platform_risk = (
+                total_risk_score / len(farmers)
+            )
+
+        high_risk_farmers = [
+            f for f in farmers
+            if f["risk_level"] == "HIGH"
+        ]
+
+        # =====================================================
+        # 7. VERIFICATION GAPS
+        # =====================================================
+        cursor.execute("""
+            SELECT
+
+                c.id as commitment_id,
+                c.crop,
+                c.zone,
+
+                u.name as farmer_name,
+
+                c.promised_qty,
+
+                COALESCE(SUM(d.delivered_qty), 0) as reported_qty,
+
+                COALESCE(SUM(
+                    CASE
+                        WHEN d.verification_status
+                        IN ('VERIFIED', 'PARTIAL')
+                        THEN d.delivered_qty
+                        ELSE 0
+                    END
+                ), 0) as verified_qty
+
+            FROM commitments c
+
+            LEFT JOIN deliveries d
+            ON c.id = d.commitment_id
+
+            LEFT JOIN users u
+            ON c.farmer_id = u.id
+
+            GROUP BY
+                c.id,
+                c.crop,
+                c.zone,
+                u.name,
+                c.promised_qty
+
+            ORDER BY c.id DESC
+        """)
+
+        gap_rows = cursor.fetchall()
+
+        verification_gaps = []
+
+        for r in gap_rows:
+
+            reported = r["reported_qty"] or 0
+            verified = r["verified_qty"] or 0
+
+            gap = max(reported - verified, 0)
+
+            if gap > 0:
+
+                verification_gaps.append({
+
+                    "commitment_id": r["commitment_id"],
+
+                    "farmer_name": r["farmer_name"],
+
+                    "crop": r["crop"],
+
+                    "zone": r["zone"] or "-",
+
+                    "reported_qty": reported,
+
+                    "verified_qty": verified,
+
+                    "gap": gap,
+
+                    "severity": round(
+                        min(100, (gap / max(reported, 1)) * 100),
+                        2
+                    )
+                })
+
+        # =====================================================
+        # 8. UNRELIABLE ACTORS
+        # =====================================================
+        unreliable_actors = []
+
+        for f in farmers:
+
+            reasons = []
+
+            if f["risk_score"] >= 70:
+                reasons.append("High operational risk")
+
+            if f["trust_score"] < 50:
+                reasons.append("Low trust score")
+
+            if f["risk_level"] == "HIGH":
+                reasons.append("Repeated delivery inconsistencies")
+
+            if reasons:
+
+                unreliable_actors.append({
+
+                    "farmer_id": f["farmer_id"],
+
+                    "farmer_name": f["farmer_name"],
+
+                    "risk_score": f["risk_score"],
+
+                    "trust_score": f["trust_score"],
+
+                    "reasons": reasons
+                })
+
+        # =====================================================
+        # 9. FINAL RESPONSE
+        # =====================================================
+        return {
+
+            # -------------------------------------------------
+            # SYSTEM OVERVIEW
+            # -------------------------------------------------
+            "system_risk_overview": {
+
+                "total_commitments": total_commitments,
+
+                "total_promised_qty": total_promised,
+
+                "total_reported_qty": total_reported,
+
+                "total_verified_qty": total_verified,
+
+                "platform_completion_rate":
+                    round(completion_rate, 2),
+
+                "verification_rate":
+                    round(verification_rate, 2),
+
+                "average_platform_risk":
+                    round(avg_platform_risk, 2),
+
+                "high_risk_farmers":
+                    len(high_risk_farmers)
+            },
+
+            # -------------------------------------------------
+            # FARMER RISK TABLE
+            # -------------------------------------------------
+            "farmer_risk_overview": farmers,
+
+            # -------------------------------------------------
+            # VERIFICATION GAPS
+            # -------------------------------------------------
+            "verification_gaps": verification_gaps,
+
+            # -------------------------------------------------
+            # UNRELIABLE ACTORS
+            # -------------------------------------------------
+            "unreliable_actors": unreliable_actors
+        }
+
+    except Exception as e:
+
         print("Error generating admin dashboard:", e)
-        return {"error": str(e)}
-    
+
+        return {
+            "error": str(e)
+        }
 def hash_password(password: str):
     if len(password.encode("utf-8")) > 72:
         raise HTTPException(
@@ -1199,129 +1480,232 @@ def compute_trend(deliveries):
     
     return avg_completion(second_half) - avg_completion(first_half)
 
-# -----------------------------
-# MAIN: Compute Risk Score
-# -----------------------------
-def compute_farmer_risk(cursor, farmer_id):
-    deliveries = get_farmer_history(cursor, farmer_id)
+def build_risk_explanation(overcommitment_risk,
+                           verification_risk,
+                           mismatch_risk,
+                           inconsistency_risk,
+                           risk_score):
+
+    explanation = []
 
     # -----------------------------
-    # No history case
+    # OVERCOMMITMENT
     # -----------------------------
-    if not deliveries:
-        return {
-            "farmer_id": farmer_id,
-            "risk_score": 0.9,
-            "risk_level": "HIGH",
-            "trend_series": [],
-            "reason": "No delivery history"
-        }
+    if overcommitment_risk > 0.2:
+        explanation.append(
+            "Farmer has committed more supply than available capacity."
+        )
+    elif overcommitment_risk > 0:
+        explanation.append(
+            "Mild overcommitment detected between supply and commitments."
+        )
 
     # -----------------------------
-    # Core metrics
+    # VERIFICATION
     # -----------------------------
-    total_delivered_hist = sum(d["delivered_qty"] or 0 for d in deliveries)
-    total_promised_hist = sum(d["promised_qty"] or 0 for d in deliveries)
-
-    delivery_rate = total_delivered_hist / total_promised_hist if total_promised_hist > 0 else 0
-    consistency = compute_consistency(deliveries)
-    overcommitment = compute_overcommitment(cursor, farmer_id)
-    trend = compute_trend(deliveries)
-    trend_series = compute_time_risk_trend(deliveries)
-
-    # -----------------------------
-    # Risk score
-    # -----------------------------
-    risk_score = (
-        0.4 * (1 - delivery_rate) +
-        0.25 * (1 - consistency) +
-        0.2 * overcommitment +
-        0.15 * max(0, -trend)
-    )
-
-    if risk_score > 0.6:
-        level = "HIGH"
-    elif risk_score > 0.3:
-        level = "MEDIUM"
-    else:
-        level = "LOW"
+    if verification_risk > 0.3:
+        explanation.append(
+            "High rejection rate from buyer verification."
+        )
+    elif verification_risk > 0:
+        explanation.append(
+            "Some deliveries have been rejected by buyer."
+        )
 
     # -----------------------------
-    # Get main crop (FIXED)
+    # MISMATCH
+    # -----------------------------
+    if mismatch_risk > 0.3:
+        explanation.append(
+            "Large gap between reported and verified deliveries."
+        )
+    elif mismatch_risk > 0:
+        explanation.append(
+            "Minor mismatch between reported and verified quantities."
+        )
+
+    # -----------------------------
+    # INCONSISTENCY
+    # -----------------------------
+    if inconsistency_risk > 0.3:
+        explanation.append(
+            "Delivery quantities are highly inconsistent over time."
+        )
+    elif inconsistency_risk > 0:
+        explanation.append(
+            "Some variation in delivery consistency detected."
+        )
+
+    # -----------------------------
+    # GLOBAL SUMMARY
+    # -----------------------------
+    if not explanation:
+        if risk_score < 30:
+            explanation.append("Farmer shows stable and reliable performance.")
+        elif risk_score < 70:
+            explanation.append("Moderate risk detected in farmer performance.")
+        else:
+            explanation.append("High risk farmer with multiple performance issues.")
+
+    return explanation
+
+def compute_farmer_risk_v2(cursor, farmer_id):
+
+    # -----------------------------
+    # 1. OVERCOMMITMENT RISK
     # -----------------------------
     cursor.execute("""
-        SELECT crop
-        FROM commitments
-        WHERE farmer_id = %s
-        ORDER BY id DESC
-        LIMIT 1
+        SELECT
+            COALESCE(SUM(c.promised_qty),0) as promised,
+            COALESCE(SUM(s.qty_max),0) as capacity
+        FROM commitments c
+        JOIN farmer_supply s
+        ON c.farmer_id = s.farmer_id
+        AND c.crop = s.crop
+        AND c.zone = s.zone
+        WHERE c.farmer_id = %s
     """, (farmer_id,))
 
-    crop_row = cursor.fetchone()
-    main_crop = crop_row["crop"] if crop_row and crop_row["crop"] else "unknown"
+    row = cursor.fetchone()
+    promised = row["promised"]
+    capacity = row["capacity"]
+
+    overcommitment_risk = (
+        (promised - capacity) / capacity
+        if capacity > 0 and promised > capacity else 0
+    )
 
     # -----------------------------
-    # Total promised (ALL commitments)
+    # 2. VERIFICATION RISK
     # -----------------------------
     cursor.execute("""
-    SELECT SUM(promised_qty) as total_promised
-    FROM commitments
-    WHERE farmer_id = %s
-""", (farmer_id,))
-    total_promised_all = cursor.fetchone()["total_promised"] or 0
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN verification_status = 'VERIFIED' THEN 1 ELSE 0 END) as verified,
+            SUM(CASE WHEN verification_status = 'REJECTED' THEN 1 ELSE 0 END) as rejected
+        FROM deliveries d
+        JOIN commitments c ON d.commitment_id = c.id
+        WHERE c.farmer_id = %s
+    """, (farmer_id,))
 
+    v = cursor.fetchone()
+    total = v["total"] or 0
+    verified = v["verified"] or 0
+    rejected = v["rejected"] or 0
+
+    verification_rate = (verified / total) if total > 0 else 0
+    rejection_rate = (rejected / total) if total > 0 else 0
+    verification_risk = rejection_rate
     # -----------------------------
-    # Total supplied (JOIN FIXED)
+    # 3. MISMATCH RISK (reported vs verified)
     # -----------------------------
     cursor.execute("""
-    SELECT SUM(qty_max) as total_supply
-    FROM farmer_supply
-    WHERE farmer_id = %s
-""", (farmer_id,))
-    total_supply = cursor.fetchone()["total_supply"] or 0
+        SELECT
+            COALESCE(SUM(d.delivered_qty),0) as reported,
+            COALESCE(SUM(
+                CASE
+                    WHEN d.verification_status = 'VERIFIED'
+                    THEN d.delivered_qty
+                    ELSE 0
+                END
+            ),0) as verified_qty
+        FROM deliveries d
+        JOIN commitments c ON d.commitment_id = c.id
+        WHERE c.farmer_id = %s
+    """, (farmer_id,))
+
+    m = cursor.fetchone()
+
+    reported = m["reported"] or 0
+    verified_qty = m["verified_qty"] or 0
+
+    mismatch_risk = (
+        (reported - verified_qty) / reported
+        if reported > 0 else 0
+    )
 
     # -----------------------------
-    # Overcommitment units (FIXED BUG)
+    # 4. DELIVERY INCONSISTENCY
     # -----------------------------
-    over_amount_units = max(0, total_promised_all - total_supply)
+    cursor.execute("""
+        SELECT delivered_qty
+        FROM deliveries d
+        JOIN commitments c ON d.commitment_id = c.id
+        WHERE c.farmer_id = %s
+    """, (farmer_id,))
+
+    rows = cursor.fetchall()
+    values = [r["delivered_qty"] for r in rows if r["delivered_qty"] is not None]
+
+    if len(values) > 1:
+        avg = sum(values) / len(values)
+        variance = sum((x - avg) ** 2 for x in values) / len(values)
+        inconsistency_risk = min(1, variance / (avg ** 2 + 1))
+    else:
+        inconsistency_risk = 0
 
     # -----------------------------
-    # SAVE TO CACHE (POSTGRESQL FIX)
+    # FINAL RISK SCORE (0 - 100)
     # -----------------------------
+    risk_score = (
+        overcommitment_risk * 35 +
+        verification_risk * 25 +
+        mismatch_risk * 25 +
+        inconsistency_risk * 15
+    ) * 100
+
+    risk_score = max(0, min(100, risk_score))
+
+    if risk_score < 30:
+        risk_level = "LOW"
+    elif risk_score < 70:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "HIGH"
+    
+    explanation = build_risk_explanation(
+    overcommitment_risk,
+    verification_risk,
+    mismatch_risk,
+    inconsistency_risk,
+    risk_score
+)
     cursor.execute("""
 INSERT INTO farmer_risk_cache (
     farmer_id,
     risk_score,
     risk_level,
+    explanation,
     last_updated
 )
-VALUES (%s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s)
 ON CONFLICT (farmer_id)
 DO UPDATE SET
     risk_score = EXCLUDED.risk_score,
     risk_level = EXCLUDED.risk_level,
+    explanation = EXCLUDED.explanation,
     last_updated = EXCLUDED.last_updated
 """, (
     farmer_id,
     round(risk_score, 2),
-    level,
+    risk_level,
+    "\n".join(explanation),
     datetime.now()
 ))
-    # -----------------------------
-    # Final response
-    # -----------------------------
     return {
-        "farmer_id": farmer_id,
-        "risk_score": round(risk_score, 2),
-        "risk_level": level,
-        "delivery_rate": round(delivery_rate, 2),
-        "consistency": round(consistency, 2),
-        "overcommitment": round(overcommitment, 2),
-        "over_amount": over_amount_units,
-        "main_crop": main_crop,
-        "trend": round(trend, 2),
-        "trend_series": trend_series
+    "risk_score": round(risk_score, 2),
+    "risk_level": risk_level,
+
+    "explanation": explanation,
+
+    "breakdown": {
+        "verification_risk": round(verification_risk * 100, 2),
+        "mismatch_risk": round(mismatch_risk * 100, 2),
+        "overcommitment_risk": round(overcommitment_risk * 100, 2),
+        "inconsistency_risk": round(inconsistency_risk * 100, 2)
     }
+}
+
 import math
 
 def sigmoid(x):
@@ -1451,7 +1835,7 @@ def recompute_all_risks():
             farmer_id = f["id"]
 
             #STEP A: Compute + cache risk
-            compute_farmer_risk(cursor, farmer_id)
+            compute_farmer_risk_v2(cursor, farmer_id)
 
             #STEP B: System-level overcommit logging
             cursor.execute("""
@@ -1642,22 +2026,24 @@ def list_supplies(
 
     for r in rows:
         try:
+           mapped = map_to_supply(dict(r))
+
            results.append(
-    SupplyOut(
-        id=r["id"],
-        farmer_id=r["farmer_id"],
-        crop=r["crop"],
-        qty_min=r["qty_min"],
-        qty_max=r["qty_max"],
-        zone=r["zone"],
-        available_from=r["available_from"],
-        available_to=r["available_to"],
-        last_updated=r["last_updated"]
-    )
-)
+            SupplyOut(
+                id=mapped["capability_id"],
+                farmer_id=mapped["actor_id"],
+                crop=mapped["crop"],
+                qty_min=mapped["quantity_range"]["min"],
+                qty_max=mapped["quantity_range"]["max"],
+                zone=mapped["zone"],
+                available_from=mapped["availability_window"]["from"],
+                available_to=mapped["availability_window"]["to"],
+                last_updated=mapped["last_updated"]
+            )
+        )
+
         except Exception as e:
             print("Skipping bad row:", r, e)
-
     return results
 
 # -----------------------------
@@ -1890,21 +2276,28 @@ def list_commitments(user=Depends(require_farmer)):
     rows = cursor.fetchall()
     conn.close()
 
-    return [
-    CommitmentOut(
-        id=r["id"],
-        farmer_id=r["farmer_id"],
-        crop=r["crop"],
-        promised_qty=r["promised_qty"],
-        zone=r["zone"],
-        delivery_start=to_date(r["delivery_start"]),
-        delivery_end=to_date(r["delivery_end"]),
-        status=r["status"],
-        created_at=to_datetime(r["created_at"]),
-        last_updated=to_datetime(r["last_updated"]),
+    results = []
+
+    for r in rows:
+
+        mapped = map_to_commitment(dict(r))
+
+        results.append(
+        CommitmentOut(
+            id=mapped["obligation_id"],
+            farmer_id=mapped["actor_id"],
+            crop=mapped["crop"],
+            promised_qty=mapped["promised_quantity"],
+            zone=mapped["zone"],
+            delivery_start=to_date(mapped["delivery_window"]["start"]),
+            delivery_end=to_date(mapped["delivery_window"]["end"]),
+            status=mapped["status"],
+            created_at=to_datetime(mapped["created_at"]),
+            last_updated=to_datetime(mapped["last_updated"]),
+        )
     )
-    for r in rows
-]
+
+    return results
 # ==================================================
 # UPDATE COMMITMENT
 # ==================================================
@@ -2119,14 +2512,23 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         # ----------------------------
         cursor.execute("""
     INSERT INTO deliveries
-    (commitment_id, delivered_qty, week_start, week_end, status, weekly_promised_qty)
-    VALUES (%s, %s, %s, %s, %s, %s)
+(
+    commitment_id,
+    delivered_qty,
+    week_start,
+    week_end,
+    status,
+    verification_status,
+    weekly_promised_qty
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
 """, (
     d.commitment_id,
     d.delivered_qty,
     to_date(d.week_start),
     to_date(d.week_end),
     status,
+    "PENDING",
     weekly_promised_qty
 ))
         # ----------------------------
@@ -2161,11 +2563,7 @@ def log_delivery(d: DeliveryCreate, user=Depends(require_farmer)):
         # ----------------------------
         # Update farmer trust
         # ----------------------------
-        try:
-            update_farmer_trust(farmer_id, status)
-        except Exception as e:
-            print("Farmer trust update failed:", e)
-
+        
         return {
             "message": "Delivery logged",
             "delivery_status": status,
@@ -2229,23 +2627,32 @@ def get_deliveries(
     rows = cursor.fetchall()
     conn.close()
 
-    return [
-        {
-            "id": r["id"],
-            "commitment_id": r["commitment_id"],
-            "delivered_qty": r["delivered_qty"] or 0,
-            "week_start": r["week_start"],
-            "week_end": r["week_end"],
-            "status": r["status"] or "UNKNOWN",
-            "crop": r["crop"],
-            "zone": r["zone"],
-            "promised_qty": r["promised_qty"],
-            "commitment_status": r["commitment_status"],
+    results = []
 
-            "farmer_id": farmer_id
-        }
-        for r in rows
-    ]
+    for r in rows:
+
+        mapped = map_to_delivery(dict(r))
+
+        results.append({
+        "id": mapped["execution_id"],
+        "commitment_id": mapped["obligation_id"],
+        "delivered_qty": mapped["delivered_qty"],
+        "week_start": mapped["week_window"]["start"],
+        "week_end": mapped["week_window"]["end"],
+        "status": mapped["execution_state"],
+
+        "crop": r["crop"],
+        "zone": r["zone"],
+        "promised_qty": r["promised_qty"],
+        "commitment_status": r["commitment_status"],
+
+        "farmer_id": farmer_id,
+
+        # NEW semantic field
+        "fulfillment_ratio": mapped["fulfillment_ratio"]
+    })
+
+    return results
 @app.get("/deliveries/{commitment_id}")
 def delivery_history(commitment_id: int, user=Depends(require_user)):
     conn, cursor = get_db()
@@ -2278,17 +2685,27 @@ WHERE d.commitment_id = %s
 
     result = []
     for r in rows:
+
+        mapped = map_to_delivery(dict(r))
+
         result.append({
-            "id": r["id"],
-            "commitment_id": r["commitment_id"],
-            "crop": r["crop"],
-            "zone": r["zone"],
-            "promised_qty": r["promised_qty"],
-            "delivered_qty": r["delivered_qty"] or 0,
-            "week_start": r["week_start"],
-            "week_end": r["week_end"],
-            "status": r["status"] or "UNKNOWN"
-        })
+        "id": mapped["execution_id"],
+        "commitment_id": mapped["obligation_id"],
+
+        "crop": r["crop"],
+        "zone": r["zone"],
+
+        "promised_qty": r["promised_qty"],
+        "delivered_qty": mapped["delivered_qty"],
+
+        "week_start": mapped["week_window"]["start"],
+        "week_end": mapped["week_window"]["end"],
+
+        "status": mapped["execution_state"],
+
+        # NEW semantic field
+        "fulfillment_ratio": mapped["fulfillment_ratio"]
+    })
 
     conn.close()
     return result
@@ -2359,29 +2776,55 @@ def delete_delivery(delivery_id: int, user=Depends(require_farmer)):
     return {"message": "Delivery deleted successfully"}
 
 @app.get("/dashboard/farmer/{farmer_id}")
-def farmer_dashboard(farmer_id: int, user=Depends(require_user)):
+def farmer_dashboard(
+    farmer_id: int,
+    user=Depends(require_user)
+):
+
     conn, cursor = get_db()
+
     try:
-    
-        if not user or not isinstance(user, dict):
-            raise HTTPException(status_code=401, detail="Unauthorized")
 
+        # --------------------------------
+        # AUTH VALIDATION
+        # --------------------------------
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized"
+            )
+
+        role = user.get("role")
         user_id = user.get("id")
-        user_role = user.get("role")
 
-        if user_id is None or user_role is None:
-            raise HTTPException(status_code=401, detail="Invalid user session")
+        # --------------------------------
+        # ACCESS CONTROL
+        # --------------------------------
+        if role == "farmer" and user_id != farmer_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only access your own dashboard"
+            )
 
-        if user_role == "farmer" and user_id != farmer_id:
-            raise HTTPException(status_code=403, detail="You can only access your own dashboard")
+        if role not in ["farmer", "admin", "buyer"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
 
-        if user_role not in ["farmer", "admin"]:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        dashboard = generate_farmer_dashboard(conn, farmer_id)
+        # --------------------------------
+        # GENERATE DASHBOARD
+        # --------------------------------
+        dashboard = generate_farmer_dashboard(
+            conn,
+            farmer_id
+        )
 
         if "error" in dashboard:
-            raise HTTPException(status_code=500, detail=dashboard["error"])
+            raise HTTPException(
+                status_code=500,
+                detail=dashboard["error"]
+            )
 
         return dashboard
 
@@ -2389,7 +2832,13 @@ def farmer_dashboard(farmer_id: int, user=Depends(require_user)):
         raise he
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
+
+        print("Dashboard route error:", e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
 
     finally:
         conn.close()
@@ -2568,7 +3017,7 @@ def risk_intelligence(user=Depends(require_admin)):
 
             row = cursor.fetchone()
             
-            risk = compute_farmer_risk(cursor, fid)
+            risk = compute_farmer_risk_v2(cursor, fid)
 
             if row:
                   risk = {
@@ -2875,6 +3324,264 @@ def update_delivery(delivery_id: int, d: DeliveryUpdate, user=Depends(require_fa
     finally:
         conn.close()
 
+# ==================================================
+# VERIFY DELIVERY (BUYER ONLY)
+# ==================================================
+@app.put("/deliveries/{delivery_id}/verify")
+def verify_delivery(
+    delivery_id: int,
+    payload: DeliveryVerification,
+    user=Depends(require_buyer)
+):
+    conn, cursor = get_db()
+    try:
+
+        allowed = ["VERIFIED", "PARTIAL", "REJECTED"]
+        if payload.verification_status not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"verification_status must be one of {allowed}"
+            )
+
+        # -----------------------------------
+        # Ensure delivery exists
+        # -----------------------------------
+        cursor.execute("""
+            SELECT
+                d.id,
+                d.delivered_qty,
+                d.commitment_id,
+                c.farmer_id,
+                c.promised_qty
+            FROM deliveries d
+            JOIN commitments c ON d.commitment_id = c.id
+            WHERE d.id = %s
+        """, (delivery_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery not found"
+            )
+
+        commitment_id = row["commitment_id"]
+        farmer_id = row["farmer_id"]
+        promised_qty = row["promised_qty"]
+
+        # -----------------------------------
+        # Compute confidence score
+        # -----------------------------------
+        confidence_score = compute_confidence_score(
+            payload.verification_status
+        )
+
+# -----------------------------------
+# Update delivery verification
+# -----------------------------------
+        cursor.execute("""
+    UPDATE deliveries
+    SET
+        verification_status = %s,
+        confidence_score = %s,
+        verification_notes = %s,
+        verified_by = %s,
+        verified_at = CURRENT_TIMESTAMP
+    WHERE id = %s
+""", (
+    payload.verification_status,
+    confidence_score,
+    payload.verification_notes,
+    user["id"],
+    delivery_id
+))
+        # -----------------------------------
+        # Recompute VERIFIED totals ONLY
+        # -----------------------------------
+        cursor.execute("""
+            SELECT COALESCE(SUM(delivered_qty), 0) AS total_verified
+            FROM deliveries
+            WHERE commitment_id = %s
+            AND verification_status = 'VERIFIED'
+        """, (commitment_id,))
+
+        verified_total = cursor.fetchone()["total_verified"]
+
+        # SAFETY
+        verified_total = min(verified_total, promised_qty)
+
+        # -----------------------------------
+        # Compute commitment status
+        # -----------------------------------
+        if verified_total >= promised_qty:
+            commitment_status = "COMPLETED"
+
+        elif verified_total > 0:
+            commitment_status = "PARTIAL"
+
+        else:
+            commitment_status = "PENDING"
+
+        # -----------------------------------
+        # Update commitment
+        # -----------------------------------
+        cursor.execute("""
+            UPDATE commitments
+            SET
+                status = %s,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (
+            commitment_status,
+            commitment_id
+        ))
+
+        conn.commit()
+
+        # -----------------------------------
+        # UPDATE TRUST
+        # -----------------------------------
+        try:
+
+            if payload.verification_status == "VERIFIED":
+                update_farmer_trust(farmer_id, "COMPLETED")
+
+            elif payload.verification_status == "PARTIAL":
+                update_farmer_trust(farmer_id, "PARTIAL")
+
+            elif payload.verification_status == "REJECTED":
+                update_farmer_trust(farmer_id, "MISSED")
+
+        except Exception as e:
+            print("Trust update failed:", e)
+
+        recompute_all_risks()
+
+        return {
+    "message": "Delivery verification updated",
+    "delivery_id": delivery_id,
+    "verification_status": payload.verification_status,
+    "confidence_score": confidence_score,
+    "verification_notes": payload.verification_notes,
+    "verified_by": user["id"],
+    "commitment_status": commitment_status,
+    "verified_total": verified_total
+}
+
+    except HTTPException as he:
+        raise he
+
+    except Exception as e:
+        print("Verification error:", e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Verification failed"
+        )
+
+    finally:
+        conn.close()
+
+# ==================================================
+# GET VERIFICATION STATUS BY COMMITMENT
+# ==================================================
+@app.get("/commitments/{commitment_id}/verification-status")
+def get_verification_status(
+    commitment_id: int,
+    user=Depends(require_user)
+):
+    conn, cursor = get_db()
+    try:
+
+        # -----------------------------------
+        # Ensure commitment exists
+        # -----------------------------------
+        cursor.execute("""
+            SELECT
+                id,
+                farmer_id,
+                crop,
+                promised_qty
+            FROM commitments
+            WHERE id = %s
+        """, (commitment_id,))
+
+        commitment = cursor.fetchone()
+
+        if not commitment:
+            raise HTTPException(
+                status_code=404,
+                detail="Commitment not found"
+            )
+
+        # -----------------------------------
+        # Access control
+        # -----------------------------------
+        if (
+            user["role"] == "farmer"
+            and user["id"] != commitment["farmer_id"]
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
+
+        # -----------------------------------
+        # Fetch deliveries
+        # -----------------------------------
+        cursor.execute("""
+            SELECT
+    d.id,
+    d.delivered_qty,
+    d.week_start,
+    d.week_end,
+    d.verification_status,
+    d.confidence_score,
+    d.verification_notes,
+    d.verified_by,
+    d.verified_at
+            FROM deliveries d
+            WHERE d.commitment_id = %s
+            ORDER BY d.logged_at ASC
+        """, (commitment_id,))
+
+        deliveries = cursor.fetchall()
+
+        return {
+            "commitment_id": commitment_id,
+            "crop": commitment["crop"],
+            "promised_qty": commitment["promised_qty"],
+            "deliveries": [
+                {
+                    "delivery_id": d["id"],
+                    "delivered_qty": d["delivered_qty"],
+                    "week_start": d["week_start"],
+                    "week_end": d["week_end"],
+                    "verification_status": d["verification_status"],
+                    "confidence_score": d["confidence_score"],
+                    "verification_notes": d["verification_notes"],
+                    "verified_by": d["verified_by"],
+                    "verified_at": d["verified_at"]
+                }
+                for d in deliveries
+            ]
+        }
+
+    except HTTPException as he:
+        raise he
+
+    except Exception as e:
+        print("Verification fetch error:", e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch verification status"
+        )
+
+    finally:
+        conn.close()
+
 @app.get("/why/{farmer_id}")
 def get_why(farmer_id: int, user=Depends(require_user)):
 
@@ -2979,19 +3686,6 @@ def generate_weekly_report(farmer_id: int, user=Depends(require_user)):
             "delivery_rate": round(delivery_rate, 2),
             "message": f"Farmer is {risk_level} risk with {int(delivery_rate * 100)}% delivery success"
         }
-
-    finally:
-        conn.close()
-
-@app.get("/debug/risk-cache")
-def debug_risk_cache():
-    conn, cursor = get_db()
-
-    try:
-        cursor.execute("SELECT * FROM farmer_risk_cache")
-        rows = cursor.fetchall()
-
-        return [dict(row) for row in rows]
 
     finally:
         conn.close()
