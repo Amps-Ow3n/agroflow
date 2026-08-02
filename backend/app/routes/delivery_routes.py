@@ -13,6 +13,9 @@ from app.models.deliveries import (
 from app.core.db import get_db
 from app.engines.delivery_engine import compute_truth_confidence
 from app.utils.delivery_validators import validate_verified_delivery
+import logging
+
+logger=logging.getLogger("agroflow")
 router = APIRouter()
 
 @router.post("/delivery/verify/{commitment_id}")
@@ -118,8 +121,13 @@ def get_school_deliveries(user=Depends(require_buyer)):
 """,(user["id"],))
         deliveries = cursor.fetchall()
 
-        print("SCHOOL DELIVERIES:", deliveries)
-
+        logger.info(
+    "School deliveries loaded",
+    extra={
+        "school_id":user["id"],
+        "count":len(deliveries)
+    }
+)
         return deliveries
         
     finally:
@@ -133,7 +141,45 @@ def log_delivery(
 ):
     conn, cursor = get_db()
 
+    cursor.execute("""
+SELECT supplier_id
+FROM supplier_commitments
+WHERE id=%s
+""",(
+    commitment_id,
+))
+
+    commitment=cursor.fetchone()
+
+    if commitment is None:
+        raise HTTPException(
+        status_code=404,
+        detail="Commitment not found"
+    )
+
+    if commitment["supplier_id"]!=user["id"]:
+        raise HTTPException(
+        status_code=403,
+        detail="Cannot deliver another supplier's commitment"
+    )
     try:
+        cursor.execute("""
+SELECT id
+FROM deliveries
+WHERE commitment_id=%s
+AND week_start=%s
+AND week_end=%s
+""",(
+    payload.commitment_id,
+    payload.week_start,
+    payload.week_end
+))
+
+        if cursor.fetchone():
+            raise HTTPException(
+        status_code=409,
+        detail="Delivery already submitted for this period"
+    )
         cursor.execute("""
             INSERT INTO deliveries (
                 commitment_id,

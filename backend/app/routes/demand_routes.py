@@ -1,14 +1,41 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.core.db import get_db
 from app.core.dependencies import require_buyer
-
+from app.core.exceptions import AgroFlowException
+from app.engines.source_rules import owns_demand
 router = APIRouter(tags=["Demands"])
 
 # SCHOOL creates demand
 @router.post("/school/demand/create")
 def create_demand(payload: dict, user=Depends(require_buyer)):
-    conn, cursor = get_db()
+    if payload.delivery_start > payload.delivery_end:
+        raise HTTPException(
+        status_code=400,
+        detail="Delivery start cannot be after delivery end"
+    )
 
+    conn, cursor = get_db()
+    cursor.execute("""
+SELECT id
+FROM school_demands
+WHERE school_id=%s
+AND product=%s
+AND delivery_start=%s
+AND delivery_end=%s
+AND status='OPEN'
+""",(
+    user["id"],
+    payload["product"],
+    payload["delivery_start"],
+    payload["delivery_end"]
+))
+
+    if cursor.fetchone():
+        raise HTTPException(
+        status_code=409,
+        detail="Duplicate demand"
+    )
+    
     try:
         cursor.execute("""
             INSERT INTO school_demands (
@@ -85,6 +112,15 @@ def update_demand(
 ):
     conn, cursor = get_db()
 
+    if not owns_demand(
+    cursor,
+    demand_id,
+    user["id"]
+):
+       raise HTTPException(
+        status_code=404,
+        detail="Demand not found."
+    )
     try:
 
         # -------------------------
@@ -104,19 +140,30 @@ def update_demand(
         demand = cursor.fetchone()
 
         if not demand:
-            return {
-                "message": "Demand not found"
-            }
 
-        if demand["status"] != "OPEN":
-            return {
-                "message": "Only OPEN demands can be edited"
-            }
+            raise AgroFlowException(
+        "Demand not found",
+        404,
+        "DEMAND_NOT_FOUND"
+    )
+
+        if demand["status"]!="OPEN":
+
+            raise AgroFlowException(
+        "Only open demands can be edited",
+        409,
+        "DEMAND_LOCKED"
+    )
 
         # -------------------------
         # STEP 2
         # Update
         # -------------------------
+        if payload.delivery_start > payload.delivery_end:
+            raise HTTPException(
+        status_code=400,
+        detail="Invalid delivery window"
+    )
         cursor.execute("""
             UPDATE school_demands
             SET
@@ -150,7 +197,15 @@ def delete_demand(
     user=Depends(require_buyer)
 ):
     conn, cursor = get_db()
-
+    if not owns_demand(
+    cursor,
+    demand_id,
+    user["id"]
+):
+       raise HTTPException(
+        status_code=404,
+        detail="Demand not found."
+    )
     try:
         cursor.execute("""
             DELETE FROM school_demands

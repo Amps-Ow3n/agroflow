@@ -17,11 +17,9 @@ from app.engines.intelligence.delivery_reliability_engine import (
     compute_supplier_ranking
 )
 
-
 router = APIRouter(
     tags=["Intelligence"]
 )
-
 
 # ==================================================
 # SUPPLIER CAPACITY INTELLIGENCE
@@ -53,12 +51,9 @@ def supplier_capacity(
 
         }
 
-
     finally:
 
         conn.close()
-
-
 
 # ==================================================
 # SUPPLIER DELIVERY RELIABILITY

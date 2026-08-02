@@ -20,17 +20,23 @@ def build_chain(
     conn, cursor = get_db()
 
     try:
-        result = build_procurement_chain(
-            cursor,
-            commitment_id
-        )
-
+        result = build_procurement_chain(cursor, commitment_id)
         conn.commit()
         return result
 
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception:
+        conn.rollback()
+        raise HTTPException(
+        status_code=500,
+        detail="Failed to build procurement chain."
+    )
+
     finally:
         conn.close()
-
 
 # ==============================
 # VIEW CHAIN
@@ -69,6 +75,16 @@ def get_chain(
 
         return cursor.fetchall()
 
+    except HTTPException:
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+        status_code=500,
+        detail="Unable to retrieve procurement chain."
+    )
+
     finally:
         conn.close()
 # ==============================
@@ -86,6 +102,16 @@ def check_feasibility(
             cursor,
             commitment_id
         )
+
+    except HTTPException:
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+        status_code=500,
+        detail="Unable to retrieve procurement chain."
+    )
 
     finally:
         conn.close()
@@ -106,6 +132,16 @@ def chain_risk(
             cursor,
             commitment_id
         )
+
+    except HTTPException:
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+        status_code=500,
+        detail="Unable to retrieve procurement chain."
+    )
 
     finally:
         conn.close()

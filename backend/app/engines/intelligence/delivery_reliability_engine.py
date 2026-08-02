@@ -135,7 +135,10 @@ def compute_delivery_reliability(
     )
 
     if total < 3:
-
+        score = min(
+    score,
+    70
+)
         confidence = "LOW_SAMPLE"
 
         confidence_message = (

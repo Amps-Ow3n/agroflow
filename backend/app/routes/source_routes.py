@@ -14,7 +14,8 @@ from app.engines.source_rules import (
 from app.models.users import get_user_by_id
 from app.core.db import get_db
 from app.core.dependencies import require_supplier
-
+from fastapi import HTTPException
+from app.core.exceptions import AgroFlowException
 router = APIRouter()
 
 @router.post("/source/register")
@@ -22,14 +23,42 @@ def register_source(
     payload: SupplySourceCreate,
     user=Depends(require_source_actor)
 ):
+    # Prevent impossible availability window
+    if payload.available_from > payload.available_to:
+        raise HTTPException(
+        status_code=400,
+        detail="available_from cannot be after available_to"
+    )
     conn, cursor = get_db()
 
     try:
         db_user = get_user_by_id(user["id"])
+        cursor.execute("""
+SELECT id
+FROM supply_sources
+WHERE actor_id=%s
+AND product=%s
+AND location=%s
+AND available_from=%s
+AND available_to=%s
+AND is_archived=FALSE
+""",(
+    user["id"],
+    payload.product,
+    payload.location,
+    payload.available_from,
+    payload.available_to
+))
 
+        if cursor.fetchone():
+            raise HTTPException(
+        status_code=409,
+        detail="Duplicate supply source"
+    )
+        payload.product = payload.product.strip().lower()
         source_id = create_supply_source(
             actor_id=user["id"],
-            actor_type=payload.actor_type,   # IMPORTANT FIX (explained below)
+            actor_type=payload.actor_type,  
             actor_name=db_user["name"],
             payload=payload
         )
@@ -54,10 +83,38 @@ def update_source(
 ):
     conn, cursor = get_db()
 
+    if not owns_source(
+    cursor,
+    source_id,
+    user["id"]
+):
+       raise HTTPException(
+        status_code=404,
+        detail="Supply source not found."
+    )
     try:
-        if not can_edit_source(cursor, source_id, user["id"]):
-            return {"message": "Edit not allowed"}
+        if not can_edit_source(
+    cursor,
+    source_id,
+    user["id"]
+):
 
+           raise AgroFlowException(
+        "You cannot edit this supply source",
+        403,
+        "SOURCE_EDIT_DENIED"
+    )
+        if (
+            payload.available_from
+            and
+            payload.available_to
+            and
+            payload.available_from > payload.available_to
+):
+            raise HTTPException(
+        status_code=400,
+        detail="Invalid availability period"
+    )
         cursor.execute("""
             UPDATE supply_sources
             SET product=%s,
@@ -93,13 +150,16 @@ def delete_source(
     try:
 
         if not owns_source(
-            cursor,
-            source_id,
-            user["id"]
-        ):
-            return {
-                "message": "Source not found"
-            }
+    cursor,
+    source_id,
+    user["id"]
+):
+
+            raise AgroFlowException(
+        "Supply source not found",
+        404,
+        "SOURCE_NOT_FOUND"
+    )
 
         # ------------------------
         # Was this source ever used?
@@ -115,8 +175,8 @@ def delete_source(
             conn.commit()
 
             return {
-                "message": "Source archived"
-            }
+    "message":"Supply source archived"
+}
 
         # ------------------------
         # Never used -> hard delete
@@ -133,8 +193,8 @@ def delete_source(
         conn.commit()
 
         return {
-            "message": "Source deleted"
-        }
+    "message":"Supply source deleted"
+}
 
     finally:
         conn.close()

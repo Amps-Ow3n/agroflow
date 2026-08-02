@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.core.db import get_db
 from app.core.auth import hash_password, verify_password, create_access_token
 from app.schemas.user_schema import UserRegister
-
+from app.core.exceptions import AgroFlowException
 router = APIRouter(tags=["Auth"])
 
 # ==============================
@@ -44,13 +44,15 @@ def register(payload: UserRegister):
             "user_id": user["id"]
         }
 
-    except Exception as e:
+    except Exception:
+
         conn.rollback()
-        print("REGISTER ERROR:", e)
-        raise HTTPException(
-            status_code=400,
-            detail=str(e) 
-        )
+
+        raise AgroFlowException(
+        message="Registration failed",
+        status_code=400,
+        error_code="REGISTRATION_FAILED"
+    )
 
     finally:
         conn.close()

@@ -37,6 +37,7 @@ def compute_dependency_risk_score(
 )
 
 def classify_chain_risk(score):
+
     if score < 10:
         return "LOW"
 
@@ -44,3 +45,45 @@ def classify_chain_risk(score):
         return "MEDIUM"
 
     return "HIGH"
+
+def compute_chain_risk_summary(
+    hops,
+    transition_risk
+):
+    """
+    Produces explainable chain-risk output.
+    """
+
+    score = compute_dependency_risk_score(
+        hops,
+        transition_risk
+    )
+
+    risk_level = classify_chain_risk(score)
+
+    reasons = []
+
+    if hops > 2:
+        reasons.append(
+            "Multiple supply allocation points increase chain complexity."
+        )
+
+    if transition_risk > 0.3:
+        reasons.append(
+            "Several source transitions increase dependency risk."
+        )
+
+    if not reasons:
+        reasons.append(
+            "No significant structural risk detected."
+        )
+
+    return {
+
+        "score": score,
+
+        "risk_level": risk_level,
+
+        "reasons": reasons
+
+    }

@@ -1,6 +1,8 @@
 from app.utils.validators import validate_positive_quantity
 from app.utils.normalizers import normalize_product
-
+from app.engines.support.allocation_engine import (
+    get_allocated_quantity
+)
 def generate_candidate_sources(
     cursor,
     product,
@@ -65,22 +67,59 @@ def build_fulfillment_plan(
     remaining = required
     total_allocated = 0
 
-    # Step 4 — allocate across multiple sources
+    source_ids = [
+    s["id"]
+    for s in sources
+]
+
+    cursor.execute("""
+SELECT
+    source_id,
+    COALESCE(
+        SUM(allocated_qty),
+        0
+    ) AS allocated
+FROM procurement_chains
+WHERE source_id = ANY(%s)
+GROUP BY source_id
+""", (source_ids,))
+
+    allocated_lookup = {
+    row["source_id"]: row["allocated"]
+    for row in cursor.fetchall()
+}
+
     for source in sources:
-        if remaining <= 0:
-            break
+
+        already_allocated = allocated_lookup.get(
+        source["id"],
+        0
+    )
+
+        usable_quantity = max(
+
+        source["qty_available"]
+        -
+        already_allocated,
+
+        0
+
+    )
+
+        if usable_quantity == 0:
+           continue
 
         allocated = min(
-            source["qty_available"],
-            remaining
-        )
+        usable_quantity,
+        remaining
+    )
 
         allocations.append({
             "source_id": source["id"],
             "source_name": source["actor_name"],
             "source_type": source["actor_type"],
             "allocated_qty": allocated,
-            "available_qty": source["qty_available"]
+            "available_qty": usable_quantity
         })
 
         total_allocated += allocated

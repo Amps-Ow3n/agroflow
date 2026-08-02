@@ -16,7 +16,6 @@ def create_user(name, email, password, role):
 
     return user
 
-
 def get_user_by_email(email):
     conn, cursor = get_db()
 

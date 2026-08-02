@@ -18,10 +18,17 @@ from app.models.chains import (
     create_chain_link
 )
 
+from app.models.chains import (
+    insert_chain_link
+)
+
 def build_procurement_chain(cursor, commitment_id):
 
-    commitment = get_commitment_by_id(commitment_id)
-
+    commitment = get_commitment_by_id(
+    cursor,
+    commitment_id
+)
+    
     if not commitment:
         raise Exception("Commitment not found")
     # Rebuild is idempotent:
@@ -43,7 +50,8 @@ def build_procurement_chain(cursor, commitment_id):
 
     # ALWAYS create chain (even partial)
     for allocation in allocations:
-        create_chain_link(
+        insert_chain_link(
+            cursor,
             commitment_id,
             allocation["source_id"],
             allocation["allocated_qty"],

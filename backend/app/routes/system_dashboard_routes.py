@@ -144,21 +144,64 @@ def get_chain_trace(commitment_id: int, user=Depends(require_admin)):
 
         enriched = []
 
-        for c in chains:
-            # source details
-            cursor.execute("""
-                SELECT *
-                FROM supply_sources
-                WHERE id = %s
-            """, (c["source_id"],))
-            source = cursor.fetchone()
+        cursor.execute("""
+SELECT
+    pc.*,
+    s.*,
+    COALESCE(a.allocated,0) AS allocated
+FROM procurement_chains pc
+         
+JOIN supply_sources s
+ON pc.source_id=s.id
+        
+LEFT JOIN (
+         
+    SELECT
+        source_id,
+        SUM(allocated_qty) AS allocated
+    FROM procurement_chains
+    GROUP BY source_id
 
-            # utilization per source
-            cursor.execute("""
-                SELECT COALESCE(SUM(allocated_qty), 0) AS allocated
-                FROM procurement_chains
-                WHERE source_id = %s
-            """, (c["source_id"],))
+) a
+         
+ON a.source_id=s.id
+
+WHERE pc.commitment_id=%s
+
+ORDER BY pc.chain_position
+""",(commitment_id,))
+
+        rows = cursor.fetchall()
+
+        enriched=[]
+
+        for row in rows:
+
+            utilization=(
+        round(
+            row["allocated"]/row["qty_available"]*100,
+            2
+        )
+        if row["qty_available"]>0
+        else 0
+    )
+
+            enriched.append({
+
+        "chain":{
+
+            "id":row["id"],
+            "allocated_qty":row["allocated_qty"],
+            "chain_position":row["chain_position"]
+
+        },
+
+        "source":row,
+
+        "utilization":utilization
+
+    })
+
             allocated = cursor.fetchone()["allocated"]
 
             utilization = (

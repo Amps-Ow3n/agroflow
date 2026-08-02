@@ -7,7 +7,6 @@ from app.routes.auth_routes import router as auth_router
 from app.routes.source_routes import router as source_router
 from app.routes.commitment_routes import router as commitment_router
 from app.routes.chain_routes import router as chain_router
-from app.routes.matching_routes import router as matching_router
 from app.routes.delivery_routes import router as delivery_router
 
 from app.routes.supplier_dashboard_routes import router as supplier_dashboard_router
@@ -17,7 +16,14 @@ from app.routes.school_routes import router as school_router
 from app.routes.demand_routes import router as demand_router
 from app.routes.intelligence_routes import router as intelligence_router
 from app.routes import admin_delivery_routes
+from app.routes.audit_routes import router as audit_router
+from app.core.errors import global_exception_handler
+import logging
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from app.core.exceptions import AgroFlowException
 # ======================================================
 # LOAD ENVIRONMENT
 # ======================================================
@@ -31,6 +37,44 @@ app = FastAPI(
     version="2.0.0"
 )
 
+app.add_exception_handler(
+    Exception,
+    global_exception_handler
+)
+
+logging.basicConfig(
+    level=logging.INFO
+)
+
+logger = logging.getLogger("agroflow")
+
+
+@app.exception_handler(AgroFlowException)
+async def agroflow_exception_handler(
+    request: Request,
+    exc: AgroFlowException
+):
+
+    logger.warning(
+        f"{request.method} {request.url} - {exc.message}"
+    )
+
+
+    return JSONResponse(
+
+        status_code=exc.status_code,
+
+        content={
+
+            "success":False,
+
+            "message":exc.message,
+
+            "error_code":exc.error_code
+
+        }
+
+    )
 # ======================================================
 # CORS
 # ======================================================
@@ -54,7 +98,6 @@ app.include_router(auth_router)
 app.include_router(source_router)
 app.include_router(commitment_router)
 app.include_router(chain_router)
-app.include_router(matching_router)
 app.include_router(delivery_router)
 
 app.include_router(supplier_dashboard_router)
@@ -65,6 +108,9 @@ app.include_router(school_router)
 app.include_router(demand_router)
 app.include_router(
     admin_delivery_routes.router
+)
+app.include_router(
+    audit_router
 )
 # ======================================================
 # ENTRYPOINT

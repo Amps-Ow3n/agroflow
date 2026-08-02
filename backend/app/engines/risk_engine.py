@@ -9,14 +9,12 @@ from app.engines.support.chain_risk_engine import (
     classify_chain_risk
 )
 
-
 def calculate_chain_risk(cursor, commitment_id):
     """
     Core risk contract.
 
     Computes overall chain risk.
     """
-
     cursor.execute("""
         SELECT *
         FROM procurement_chains
@@ -26,16 +24,12 @@ def calculate_chain_risk(cursor, commitment_id):
 
     chain_rows = cursor.fetchall()
     
-    print("Commitment:", commitment_id)
-    print("Rows returned:", len(chain_rows))
-    print(chain_rows)
     integrity = validate_chain_integrity(
         cursor,
         commitment_id
     )
 
     hops = compute_chain_hops(chain_rows)
-    print("Computed hops:", hops)
     transition_risk = compute_actor_transition_risk(
         chain_rows
     )

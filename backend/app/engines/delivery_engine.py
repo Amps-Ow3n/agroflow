@@ -14,4 +14,25 @@ def compute_truth_confidence(
     if delay_status == "DELAYED":
         score -= 0.2
 
-    return max(0.0, round(score, 2))
+    return {
+
+"score":
+max(
+0.0,
+round(score,2)
+),
+
+"factors":{
+
+"verification":
+verification_status,
+
+"quality":
+quality_status,
+
+"delay":
+delay_status
+
+}
+
+}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.core.db import get_db
 from app.core.dependencies import require_supplier
 from app.schemas.commitment_schema import SupplierCommitmentCreate
@@ -6,7 +6,11 @@ from app.engines.feasibility_engine import evaluate_commitment_feasibility
 from app.engines.feasibility_engine import (
     evaluate_commitment_payload
 )
-from app.engines.source_rules import update_commitment_status
+from app.engines.source_rules import (
+    update_commitment_status,
+    owns_commitment
+)
+
 router = APIRouter(tags=["Commitments"])
 
 # ==============================
@@ -32,7 +36,38 @@ def create_commitment(
                 "message": "Commitment rejected",
                 "feasibility": feasibility
             }
+        cursor.execute("""
+SELECT id
+FROM supply_sources
+WHERE id=%s
+AND actor_id=%s
+AND is_archived=FALSE
+""",(
+    payload.source_id,
+    user["id"]
+))
 
+        if cursor.fetchone() is None:
+            raise HTTPException(
+    status_code=404,
+    detail="Resource not found."
+)
+        cursor.execute("""
+SELECT id
+FROM supplier_commitments
+WHERE supplier_id=%s
+AND demand_id=%s
+AND status!='CANCELLED'
+""",(
+    user["id"],
+    payload.demand_id
+))
+
+        if cursor.fetchone():
+            raise HTTPException(
+        status_code=409,
+        detail="Commitment already exists"
+    )
         cursor.execute("""
             INSERT INTO supplier_commitments(
                 supplier_id,
@@ -133,7 +168,15 @@ def change_commitment_status(
     user=Depends(require_supplier)
 ):
     conn, cursor = get_db()
-
+    if not owns_commitment(
+    cursor,
+    id,
+    user["id"]
+):
+       raise HTTPException(
+        status_code=404,
+        detail="Commitment not found."
+    )
     try:
         update_commitment_status(
             cursor,

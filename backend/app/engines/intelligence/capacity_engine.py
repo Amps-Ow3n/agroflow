@@ -61,37 +61,34 @@ def compute_supplier_capacity(
 
     results = []
 
+    cursor.execute("""
+SELECT
+    LOWER(product) AS product,
+    COALESCE(
+        SUM(promised_qty),
+        0
+    ) AS committed
+FROM supplier_commitments
+WHERE supplier_id=%s
+AND status IN ('PENDING','ACCEPTED')
+GROUP BY LOWER(product)
+""", (supplier_id,))
+
+    commitment_totals = {
+        row["product"]: row["committed"]
+        for row in cursor.fetchall()
+}
+
     for source in sources:
 
         product = normalize_product(
-            source["product"]
-        )
+        source["product"]
+    )
 
-        cursor.execute("""
-            SELECT
-                COALESCE(
-                    SUM(promised_qty),
-                    0
-                ) AS committed
-
-            FROM supplier_commitments
-
-            WHERE supplier_id = %s
-
-            AND LOWER(product) = LOWER(%s)
-
-            AND status IN (
-                'PENDING',
-                'ACCEPTED'
-            )
-        """, (
-            supplier_id,
-            product
-        ))
-
-        commitment_row = cursor.fetchone()
-
-        committed = commitment_row["committed"]
+        committed = commitment_totals.get(
+        product,
+        0
+    )
 
         available = source["available"]
 

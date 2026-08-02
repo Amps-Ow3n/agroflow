@@ -10,6 +10,7 @@ from app.utils.delivery_validators import (
 from app.engines.delivery_engine import (
     compute_truth_confidence
 )
+from app.utils.audit import create_audit_log
 
 router = APIRouter(
     prefix="/dashboard/system",
@@ -85,10 +86,22 @@ def correct_delivery(
             WHERE id=%s
         """,(delivery_id,))
 
-
         delivery=cursor.fetchone()
 
-
+        received_qty = payload.get(
+                    "received_qty",
+                    delivery["received_qty"]
+                )
+        
+        if (
+           received_qty is not None
+           and
+           received_qty > delivery["delivered_qty"]
+):
+           raise HTTPException(
+        status_code=400,
+        detail="Received quantity cannot exceed delivered quantity"
+    )
         if not delivery:
 
             raise HTTPException(
@@ -96,12 +109,6 @@ def correct_delivery(
                 detail="Delivery not found"
             )
 
-
-        received_qty = payload.get(
-            "received_qty",
-            delivery["received_qty"]
-        )
-        
         if received_qty is not None:
             received_qty = int(received_qty)
 
@@ -180,12 +187,21 @@ def correct_delivery(
             delivery_id
         ))
 
+        updated = cursor.fetchone()
 
-        updated=cursor.fetchone()
+
+        create_audit_log(
+    cursor,
+    user["id"],
+    "CORRECT_DELIVERY",
+    "delivery",
+    delivery_id,
+    old_data=dict(delivery),
+    new_data=dict(updated)
+)
 
 
         conn.commit()
-
 
         return {
             "message":"Delivery corrected",

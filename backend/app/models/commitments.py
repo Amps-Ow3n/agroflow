@@ -54,18 +54,16 @@ def get_supplier_commitments(supplier_id):
 
     return commitments
 
-
-def get_commitment_by_id(commitment_id):
-    conn, cursor = get_db()
-
+def get_commitment_by_id(
+    cursor,
+    commitment_id
+):
     cursor.execute("""
         SELECT *
         FROM supplier_commitments
         WHERE id = %s
-    """, (commitment_id,))
+    """, (
+        commitment_id,
+    ))
 
-    commitment = cursor.fetchone()
-
-    conn.close()
-
-    return commitment
+    return cursor.fetchone()
