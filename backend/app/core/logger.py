@@ -98,11 +98,11 @@ def log_error(
 
     message,
 
-    user_id=None,
+    user_id="-",
 
-    action=None,
+    action="-",
 
-    entity=None,
+    entity="-",
 
     exception=None,
 
@@ -112,21 +112,19 @@ def log_error(
 
     logger.error(
 
-        "",
+        message,
 
         extra={
 
-            "message":message,
+            **_extra(
+                user_id=user_id,
+                action=action,
+                entity=entity
+            ),
 
-            "user_id":user_id,
+            "exception": str(exception) if exception else "-",
 
-            "action":action,
-
-            "entity":entity,
-
-            "exception":str(exception) if exception else None,
-
-            "extra":extra or {}
+            "details": extra or {}
 
         }
 
