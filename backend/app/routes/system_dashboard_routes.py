@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends
 from app.core.db import get_db
 from app.core.dependencies import require_admin
+from app.engines.support.reliability_engine import compute_supplier_reliability
 
 router = APIRouter(prefix="/dashboard/system", tags=["System Dashboard"])
-
 
 @router.get("/overview")
 def system_overview(user=Depends(require_admin)):
@@ -107,8 +107,6 @@ ORDER BY created_at DESC
         deliveries = cursor.fetchall()
 
         # 4. Reliability score (single source of truth)
-        from app.engines.support.reliability_engine import compute_supplier_reliability
-
         reliability = compute_supplier_reliability(
             cursor,
             commitment["supplier_id"]
@@ -130,18 +128,6 @@ def get_chain_trace(commitment_id: int, user=Depends(require_admin)):
     conn, cursor = get_db()
 
     try:
-        # 1. Get all chains
-        cursor.execute("""
-            SELECT *
-            FROM procurement_chains
-            WHERE commitment_id = %s
-            ORDER BY chain_position ASC
-        """, (commitment_id,))
-        chains = cursor.fetchall()
-
-        if not chains:
-            return {"chains": []}
-
         enriched = []
 
         cursor.execute("""
@@ -173,46 +159,36 @@ ORDER BY pc.chain_position
 
         rows = cursor.fetchall()
 
-        enriched=[]
+        if not rows:
+            return {
+        "commitment_id": commitment_id,
+        "chain_trace": []
+    }
+        enriched = []
 
         for row in rows:
 
-            utilization=(
-        round(
-            row["allocated"]/row["qty_available"]*100,
-            2
-        )
-        if row["qty_available"]>0
-        else 0
-    )
-
-            enriched.append({
-
-        "chain":{
-
-            "id":row["id"],
-            "allocated_qty":row["allocated_qty"],
-            "chain_position":row["chain_position"]
-
-        },
-
-        "source":row,
-
-        "utilization":utilization
-
-    })
-
-            allocated = cursor.fetchone()["allocated"]
-
             utilization = (
-                round((allocated / source["qty_available"]) * 100, 2)
-                if source and source["qty_available"] > 0 else 0
+                round(
+                    (row["allocated"] / row["qty_available"]) * 100,
+                    2
+                )
+                if row["qty_available"] > 0
+                else 0
             )
 
             enriched.append({
-                "chain": c,
-                "source": source,
+
+                "chain": {
+                    "id": row["id"],
+                    "allocated_qty": row["allocated_qty"],
+                    "chain_position": row["chain_position"]
+                },
+
+                "source": row,
+
                 "utilization": utilization
+
             })
 
         return {
@@ -224,7 +200,10 @@ ORDER BY pc.chain_position
         conn.close()
     
 @router.get("/failure-map")
-def system_failure_map(user=Depends(require_admin)):
+def system_failure_map(
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(require_admin)):
     conn, cursor = get_db()
 
     try:
@@ -247,7 +226,7 @@ def system_failure_map(user=Depends(require_admin)):
                 d.verification_status = 'REJECTED'
                 OR d.quality_status = 'FAILED'
                 OR d.delay_status = 'DELAYED'
-        """)
+        """ (limit, offset))
 
         rows = cursor.fetchall()
         results = []
@@ -284,7 +263,10 @@ def system_failure_map(user=Depends(require_admin)):
         conn.close()
                 
 @router.get("/bottlenecks")
-def system_bottlenecks(user=Depends(require_admin)):
+def system_bottlenecks(
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(require_admin)):
     conn, cursor = get_db()
 
     try:
@@ -308,7 +290,7 @@ s.id,
 s.actor_name,
 s.product,
 s.qty_available
-        """)
+        """ (limit, offset))
 
         rows = cursor.fetchall()
 
@@ -343,6 +325,8 @@ s.qty_available
 
 @router.get("/truth-ledger")
 def get_truth_ledger(
+    limit: int = 20,
+    offset: int = 0,
     user=Depends(require_admin)
 ):
 
@@ -373,8 +357,10 @@ def get_truth_ledger(
             ON c.school_id=sch.id
 
             ORDER BY d.created_at DESC
+            LIMIT %s
+OFFSET %s
 
-        """)
+        """ (limit, offset))
 
         return cursor.fetchall()
 

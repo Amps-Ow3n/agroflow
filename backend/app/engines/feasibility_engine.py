@@ -7,7 +7,7 @@ from app.engines.support.quantity_feasibility_engine import (
 from app.engines.support.time_feasibility_engine import (
     evaluate_time_feasibility
 )
-
+from app.logs.decision_logger import log_decision
 # ==========================
 # POST-SAVE CHECK (existing commitments)
 # ==========================
@@ -38,14 +38,30 @@ def evaluate_commitment_feasibility(cursor, commitment_id):
         commitment["product"]
     )
 
-
     quantity = evaluate_feasibility(
-        commitment["promised_qty"],
-        total_available,
-        allocated_elsewhere
+    commitment["promised_qty"],
+    total_available,
+    allocated_elsewhere
+)
+
+    log_decision(
+
+    cursor,
+
+    actor_id=commitment["supplier_id"],
+
+    decision_type="FEASIBILITY_CHECK",
+
+    reference_id=commitment_id,
+
+    explanation=(
+        f"Available={total_available}, "
+        f"Allocated={allocated_elsewhere}, "
+        f"Requested={commitment['promised_qty']}, "
+        f"Status={quantity['status']}."
     )
 
-
+)
     return {
         "quantity": quantity,
         "status": quantity["status"]
@@ -95,10 +111,7 @@ def evaluate_commitment_payload(
         normalized_product
     ))
 
-
     sources = cursor.fetchall()
-
-
 
     timing = evaluate_time_feasibility(
         sources,
@@ -107,19 +120,43 @@ def evaluate_commitment_payload(
         payload.promised_qty
     )
 
+    decision_type = (
+    "COMMITMENT_ACCEPTED"
+    if quantity["feasible"]
+    and timing["time_feasible"]
+    else "COMMITMENT_REJECTED"
+)
+
+    log_decision(
+
+    cursor,
+
+    actor_id=supplier_id,
+
+    decision_type=decision_type,
+
+    reference_id=payload.source_id,
+
+    explanation=(
+        f"Available={total_available}, "
+        f"Allocated={allocated_elsewhere}, "
+        f"Requested={payload.promised_qty}, "
+        f"Time feasible={timing['time_feasible']}."
+    )
+
+)
 
     return {
 
-        "quantity": quantity,
+    "quantity": quantity,
 
-        "timing": timing,
+    "timing": timing,
 
-        "status": (
-            "feasible"
-            if quantity["feasible"]
-            and timing["time_feasible"]
+    "status": (
+        "feasible"
+        if quantity["feasible"]
+        and timing["time_feasible"]
+        else "infeasible"
+    )
 
-            else "infeasible"
-        )
-
-    }
+}

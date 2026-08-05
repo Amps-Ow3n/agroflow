@@ -13,9 +13,14 @@ from app.models.deliveries import (
 from app.core.db import get_db
 from app.engines.delivery_engine import compute_truth_confidence
 from app.utils.delivery_validators import validate_verified_delivery
-import logging
+from app.core.logger import (
+    log_warning,
+    log_error,
+    log_info
+)
+from app.utils.audit import create_audit_log
+from app.logs.decision_logger import log_decision
 
-logger=logging.getLogger("agroflow")
 router = APIRouter()
 
 @router.post("/delivery/verify/{commitment_id}")
@@ -26,59 +31,120 @@ def verify_delivery(
 ):
     conn, cursor = get_db()
 
-    cursor.execute("""
+    try:
+
+        cursor.execute("""
         SELECT *
         FROM supplier_commitments
         WHERE id = %s
     """, (commitment_id,))
-    commitment = cursor.fetchone()
+        commitment = cursor.fetchone()
 
-    if not commitment:
-        conn.close()
-        raise HTTPException(404, "Commitment not found")
+        if not commitment:
+            conn.close()
+            raise HTTPException(404, "Commitment not found")
 
-    if commitment["school_id"] != user["id"]:
-        conn.close()
-        raise HTTPException(403, "Not your commitment")
+        if commitment["school_id"] != user["id"]:
+           conn.close()
+           raise HTTPException(403, "Not your commitment")
 
-    delivery = get_latest_pending_delivery(cursor, commitment_id)
+        delivery = get_latest_pending_delivery(cursor, commitment_id)
 
-    if not delivery:
-        conn.close()
-        raise HTTPException(404, "No pending delivery")
+        if not delivery:
+            conn.close()
+            raise HTTPException(404, "No pending delivery")
 
-    confidence = compute_truth_confidence(
+        confidence = compute_truth_confidence(
         payload.verification_status,
         payload.quality_status,
         payload.delay_status
     )
+    
+        log_decision(
 
-    validate_verified_delivery(
+    cursor,
+
+    actor_id=user["id"],
+
+    decision_type="TRUTH_CONFIDENCE",
+
+    reference_id=delivery["id"],
+
+    explanation=(
+        f"Computed confidence score "
+        f"{confidence}."
+    )
+
+)
+        validate_verified_delivery(
     payload.verification_status,
     payload.received_qty,
     payload.quality_status,
     payload.delay_status
 )
 
-    updated_delivery = verify_delivery_record(
+        updated_delivery = verify_delivery_record(
     cursor,
     delivery["id"],
     payload,
     user["id"],
     confidence
 )
+        create_audit_log(
 
-    conn.commit()
-    conn.close()
+    cursor,
 
-    return {
+    user["id"],
+
+    "VERIFY_DELIVERY",
+
+    "delivery",
+
+    delivery["id"],
+
+    new_data={
+        "verification_status":
+            payload.verification_status,
+        "quality_status":
+            payload.quality_status,
+        "delay_status":
+            payload.delay_status
+    }
+
+)
+        conn.commit()
+        return {
     "message":"Delivery verified",
     "delivery":updated_delivery,
     "confidence_score":confidence
 }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+        message="Database transaction failed",
+        user_id=user["id"],
+        action="DATABASE_ERROR",
+        entity="delivery",
+        extra={
+            "exception": str(e)
+        }
+    )
+
+        raise
+
+    finally:
+
+        conn.close()
+
 @router.get("/school/deliveries")
-def get_school_deliveries(user=Depends(require_buyer)):
+def get_school_deliveries(
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(require_buyer)
+):
     conn, cursor = get_db()
 
     try:
@@ -117,12 +183,17 @@ def get_school_deliveries(user=Depends(require_buyer)):
     WHERE c.school_id=%s
 
     ORDER BY d.created_at DESC
+    LIMIT %s
+OFFSET %s
 
-""",(user["id"],))
+""",(user["id"], limit, offset))
         deliveries = cursor.fetchall()
 
-        logger.info(
-    "School deliveries loaded",
+        log_info(
+    message="School viewed deliveries",
+    user_id=user["id"],
+    action="VIEW_DELIVERIES",
+    entity="supply_source",
     extra={
         "school_id":user["id"],
         "count":len(deliveries)
@@ -197,8 +268,29 @@ AND week_end=%s
         ))
 
         delivery = cursor.fetchone()
-        conn.commit()
 
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "CREATE_DELIVERY",
+
+    "delivery",
+
+    delivery["id"],
+
+    new_data={
+        "quantity":
+            payload.delivered_qty,
+        "commitment_id":
+            commitment_id
+    }
+
+)
+
+        conn.commit()
         return {
             "status": "LOGGED",
             "delivery_id": delivery["id"]
@@ -209,6 +301,8 @@ AND week_end=%s
 
 @router.get("/supplier/deliveries")
 def supplier_deliveries(
+    limit: int = 20,
+    offset: int = 0,
     user=Depends(require_supplier)
 ):
-    return get_supplier_deliveries(user["id"])
+    return get_supplier_deliveries(user["id"], limit, offset)

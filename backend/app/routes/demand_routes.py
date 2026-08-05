@@ -3,6 +3,8 @@ from app.core.db import get_db
 from app.core.dependencies import require_buyer
 from app.core.exceptions import AgroFlowException
 from app.engines.source_rules import owns_demand
+from app.utils.audit import create_audit_log
+from app.core.logger import log_error
 router = APIRouter(tags=["Demands"])
 
 # SCHOOL creates demand
@@ -15,7 +17,9 @@ def create_demand(payload: dict, user=Depends(require_buyer)):
     )
 
     conn, cursor = get_db()
-    cursor.execute("""
+
+    try:
+        cursor.execute("""
 SELECT id
 FROM school_demands
 WHERE school_id=%s
@@ -30,13 +34,12 @@ AND status='OPEN'
     payload["delivery_end"]
 ))
 
-    if cursor.fetchone():
-        raise HTTPException(
+        if cursor.fetchone():
+            raise HTTPException(
         status_code=409,
         detail="Duplicate demand"
     )
     
-    try:
         cursor.execute("""
             INSERT INTO school_demands (
                 school_id,
@@ -56,6 +59,26 @@ AND status='OPEN'
         ))
 
         demand = cursor.fetchone()
+
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "CREATE_DEMAND",
+
+    "school_demand",
+
+    demand["id"],
+
+    new_data={
+        "product":payload["product"],
+        "quantity":payload["quantity"]
+    }
+
+)
+
         conn.commit()
 
         return {
@@ -63,13 +86,32 @@ AND status='OPEN'
             "demand_id": demand["id"]
         }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+        message="Database transaction failed",
+        user_id=user["id"],
+        action="DATABASE_ERROR",
+        entity="school_demand",
+        extra={
+            "exception": str(e)
+        }
+    )
+
+        raise
+
     finally:
         conn.close()
 
 
 # SCHOOL views own demands
 @router.get("/school/demands")
-def get_school_demands(user=Depends(require_buyer)):
+def get_school_demands(
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(require_buyer)):
     conn, cursor = get_db()
 
     try:
@@ -78,7 +120,9 @@ def get_school_demands(user=Depends(require_buyer)):
             FROM school_demands
             WHERE school_id = %s
             ORDER BY created_at DESC
-        """, (user["id"],))
+            LIMIT %s
+OFFSET %s
+        """, (user["id"], limit, offset))
 
         return cursor.fetchall()
 
@@ -87,7 +131,10 @@ def get_school_demands(user=Depends(require_buyer)):
 
 # SUPPLIER sees open demands
 @router.get("/supplier/open-demands")
-def get_open_demands():
+def get_open_demands(
+    limit: int = 20,
+    offset: int = 0,
+):
     conn, cursor = get_db()
 
     try:
@@ -97,7 +144,9 @@ def get_open_demands():
             JOIN users u ON d.school_id = u.id
             WHERE d.status = 'OPEN'
             ORDER BY d.created_at DESC
-        """)
+            LIMIT %s
+OFFSET %s
+        """(limit, offset))
 
         return cursor.fetchall()
 
@@ -182,6 +231,21 @@ def update_demand(
             user["id"]
         ))
 
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "UPDATE_DEMAND",
+
+    "school_demand",
+
+    demand_id,
+
+    new_data=payload
+
+)
         conn.commit()
 
         return {
@@ -216,6 +280,19 @@ def delete_demand(
             user["id"]
         ))
 
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "DELETE_DEMAND",
+
+    "school_demand",
+
+    demand_id
+
+)
         conn.commit()
 
         return {"message": "Demand deleted"}

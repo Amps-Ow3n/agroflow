@@ -10,7 +10,8 @@ from app.engines.source_rules import (
     update_commitment_status,
     owns_commitment
 )
-
+from app.utils.audit import create_audit_log
+from app.core.logger import log_error
 router = APIRouter(tags=["Commitments"])
 
 # ==============================
@@ -90,6 +91,28 @@ AND status!='CANCELLED'
 
         commitment = cursor.fetchone()
 
+
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "CREATE_COMMITMENT",
+
+    "supplier_commitment",
+
+    commitment["id"],
+
+        new_data={
+        "product":payload.product,
+        "quantity":payload.promised_qty,
+        "school_id":payload.school_id
+    }
+
+)
+
+
         conn.commit()
 
         return {
@@ -98,6 +121,22 @@ AND status!='CANCELLED'
             "feasibility":feasibility
         }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="supplier_commitment",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
+
     finally:
         conn.close()
 # ==============================
@@ -105,6 +144,8 @@ AND status!='CANCELLED'
 # ==============================
 @router.get("/supplier/commitments")
 def get_supplier_commitments(
+    limit: int = 20,
+    offset: int = 0,
     user=Depends(require_supplier)
 ):
     conn, cursor = get_db()
@@ -154,7 +195,9 @@ ON u.id = sc.school_id
 WHERE sc.supplier_id=%s
 
 ORDER BY sc.created_at DESC;
-        """, (user["id"],))
+LIMIT %s
+OFFSET %s
+        """, (user["id"], limit, offset))
 
         return cursor.fetchall()
 
@@ -179,14 +222,50 @@ def change_commitment_status(
     )
     try:
         update_commitment_status(
-            cursor,
-            id,
-            payload["status"]
-        )
+    cursor,
+    id,
+    payload["status"]
+)
+
+
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "CHANGE_COMMITMENT_STATUS",
+
+    "supplier_commitment",
+
+    id,
+
+    new_data={
+        "status":payload["status"]
+    }
+
+)
+
 
         conn.commit()
 
         return {"message": "Status updated"}
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="supplier_commitment",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
 
     finally:
         conn.close()

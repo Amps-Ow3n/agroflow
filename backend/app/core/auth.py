@@ -3,13 +3,14 @@ from jose import JWTError, jwt
 from fastapi import HTTPException, status
 from passlib.context import CryptContext
 from uuid import uuid4
-import os
-SECRET_KEY = os.getenv(
-    "JWT_SECRET_KEY"
-)
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+from app.core.config import settings
+from app.core.logger import log_warning
 
+SECRET_KEY = settings.JWT_SECRET_KEY
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = (
+    settings.ACCESS_TOKEN_EXPIRE_MINUTES
+)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # -----------------------------------
@@ -92,8 +93,23 @@ def decode_access_token(token: str):
 
         return payload
 
-    except JWTError:
+    except JWTError as exc:
+
+        log_warning(
+
+        message="Authentication failed",
+
+        action="TOKEN_INVALID",
+
+        entity="authentication",
+
+        extra={
+            "exception":str(exc)
+        }
+
+    )
+
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed"
-        )
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication failed"
+    )

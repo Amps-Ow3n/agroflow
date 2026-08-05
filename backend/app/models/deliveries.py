@@ -31,7 +31,8 @@ def log_delivery(
 
     return delivery
 
-def get_supplier_deliveries(supplier_id):
+def get_supplier_deliveries(supplier_id, limit=20,
+    offset=0):
     conn, cursor = get_db()
 
     cursor.execute("""
@@ -65,7 +66,9 @@ ON school.id = c.school_id
 WHERE c.supplier_id=%s
 
 ORDER BY d.created_at DESC
-    """, (supplier_id,))
+LIMIT %s
+OFFSET %s
+    """, (supplier_id, limit, offset))
 
     deliveries = cursor.fetchall()
 
@@ -129,7 +132,8 @@ def get_commitment_deliveries(commitment_id):
 
     return deliveries
 
-def get_latest_pending_delivery(cursor, commitment_id):
+def get_latest_pending_delivery(cursor, commitment_id, limit=20,
+    offset=0):
     cursor.execute("""
         SELECT *
         FROM deliveries
@@ -137,7 +141,7 @@ def get_latest_pending_delivery(cursor, commitment_id):
         AND verification_status IS NULL
         ORDER BY id DESC
         LIMIT 1
-    """, (commitment_id,))
+    """, (commitment_id, limit, offset))
 
     return cursor.fetchone()
 
@@ -146,14 +150,16 @@ def verify_delivery_record(
     delivery_id,
     payload,
     verified_by,
-    confidence
+    confidence,
+    limit=20,
+    offset=0
 ):
     # Step 1: Load current delivery
     cursor.execute("""
         SELECT delivered_qty
         FROM deliveries
         WHERE id = %s
-    """, (delivery_id,))
+    """, (delivery_id, limit, offset))
 
     delivery = cursor.fetchone()
 

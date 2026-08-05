@@ -1,8 +1,15 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-import os
+from fastapi import (
+    FastAPI,
+    Request
+)
+import uuid
+import time
 
+from app.core.request_context import (
+    set_request_id
+)
+from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import settings
 from app.routes.auth_routes import router as auth_router
 from app.routes.source_routes import router as source_router
 from app.routes.commitment_routes import router as commitment_router
@@ -18,16 +25,15 @@ from app.routes.intelligence_routes import router as intelligence_router
 from app.routes import admin_delivery_routes
 from app.routes.audit_routes import router as audit_router
 from app.core.errors import global_exception_handler
-import logging
-
+from app.core.logger import (
+    log_warning,
+    log_info,
+    log_error
+)
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app.core.exceptions import AgroFlowException
-# ======================================================
-# LOAD ENVIRONMENT
-# ======================================================
-load_dotenv()
 
 # ======================================================
 # APP INIT
@@ -37,17 +43,63 @@ app = FastAPI(
     version="2.0.0"
 )
 
+@app.middleware("http")
+async def request_tracking_middleware(
+    request: Request,
+    call_next
+):
+
+    request_id = str(
+        uuid.uuid4()
+    )
+
+    set_request_id(
+        request_id
+    )
+
+    request.state.request_id = (
+        request_id
+    )
+
+    start_time = time.time()
+
+
+    log_info(
+        message="REQUEST_START",
+        action="REQUEST_START",
+        entity=request.url.path
+    )
+
+
+    response = await call_next(
+        request
+    )
+
+
+    duration = round(
+        (time.time() - start_time) * 1000,
+        2
+    )
+
+
+    log_info(
+        message=f"REQUEST_END duration={duration}ms",
+        action="REQUEST_END",
+        entity=request.url.path
+    )
+
+
+    response.headers[
+        "X-Request-ID"
+    ] = request_id
+
+
+    return response
+
 app.add_exception_handler(
     Exception,
     global_exception_handler
 )
-
-logging.basicConfig(
-    level=logging.INFO
-)
-
-logger = logging.getLogger("agroflow")
-
 
 @app.exception_handler(AgroFlowException)
 async def agroflow_exception_handler(
@@ -55,10 +107,11 @@ async def agroflow_exception_handler(
     exc: AgroFlowException
 ):
 
-    logger.warning(
-        f"{request.method} {request.url} - {exc.message}"
-    )
-
+    log_warning(
+    message=exc.message,
+    action="APPLICATION_ERROR",
+    entity=request.url.path
+)
 
     return JSONResponse(
 
@@ -78,10 +131,7 @@ async def agroflow_exception_handler(
 # ======================================================
 # CORS
 # ======================================================
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
+origins = settings.CORS_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,

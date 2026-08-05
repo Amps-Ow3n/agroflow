@@ -1,7 +1,5 @@
-# backend/app/logs/decision_logger.py
-
 from datetime import datetime
-
+from app.core.logger import log_info
 
 def log_decision(
     cursor,
@@ -13,7 +11,22 @@ def log_decision(
     """
     Stores explainable decision trail.
     """
+    log_info(
 
+    message="Decision recorded",
+
+    user_id=actor_id,
+
+    action=decision_type,
+
+    entity="decision",
+
+    extra={
+        "reference_id": reference_id,
+        "explanation": explanation
+    }
+
+)
     cursor.execute("""
         INSERT INTO decision_logs (
             actor_id,

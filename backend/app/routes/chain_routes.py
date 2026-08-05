@@ -6,7 +6,8 @@ from app.core.dependencies import require_supplier, require_user
 from app.engines.chain_engine import build_procurement_chain
 from app.engines.feasibility_engine import evaluate_commitment_feasibility
 from app.engines.risk_engine import calculate_chain_risk
-
+from app.utils.audit import create_audit_log
+from app.core.logger import log_error
 router = APIRouter(tags=["Chains"])
 
 # ==============================
@@ -20,7 +21,27 @@ def build_chain(
     conn, cursor = get_db()
 
     try:
-        result = build_procurement_chain(cursor, commitment_id)
+        result = build_procurement_chain(
+    cursor,
+    commitment_id
+)
+
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "BUILD_CHAIN",
+
+    "procurement_chain",
+
+    commitment_id,
+
+    new_data=result
+
+)
+
         conn.commit()
         return result
 
@@ -28,8 +49,20 @@ def build_chain(
         conn.rollback()
         raise
 
-    except Exception:
+    except Exception as e:
+
         conn.rollback()
+
+        log_error(
+        message="Database transaction failed",
+        user_id=user["id"],
+        action="DATABASE_ERROR",
+        entity="procurement_chain",
+        extra={
+            "exception": str(e)
+        }
+    )
+
         raise HTTPException(
         status_code=500,
         detail="Failed to build procurement chain."

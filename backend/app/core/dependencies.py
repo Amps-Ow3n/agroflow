@@ -1,7 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-
 from app.core.auth import decode_access_token
+from app.core.logger import log_warning
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -34,6 +34,23 @@ def require_role(allowed_roles: list):
             )
 
         if role not in allowed_roles:
+            log_warning(
+
+        message="Permission denied",
+
+        user_id=user["id"],
+
+        action="PERMISSION_DENIED",
+
+        entity="authorization",
+
+        extra={
+            "role":role,
+            "allowed_roles":allowed_roles
+        }
+
+    )
+
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action."

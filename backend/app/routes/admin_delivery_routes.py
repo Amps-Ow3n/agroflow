@@ -11,7 +11,8 @@ from app.engines.delivery_engine import (
     compute_truth_confidence
 )
 from app.utils.audit import create_audit_log
-
+from app.logs.decision_logger import log_decision
+from app.core.logger import log_error
 router = APIRouter(
     prefix="/dashboard/system",
     tags=["Admin Delivery Control"]
@@ -24,6 +25,8 @@ router = APIRouter(
 @router.get("/commitment/{commitment_id}/deliveries")
 def get_commitment_deliveries(
     commitment_id:int,
+    limit: int = 20,
+    offset: int = 0,
     user=Depends(require_admin)
 ):
 
@@ -52,17 +55,15 @@ def get_commitment_deliveries(
             WHERE d.commitment_id=%s
 
             ORDER BY d.created_at DESC
+            LIMIT %s
+            OFFSET %s
 
-        """,(commitment_id,))
-
+        """,(commitment_id, limit, offset))
 
         return cursor.fetchall()
 
-
     finally:
         conn.close()
-
-
 
 # ============================================
 # ADMIN CORRECTION
@@ -145,7 +146,22 @@ def correct_delivery(
             delay_status
         )
 
+        log_decision(
 
+    cursor,
+
+    actor_id=user["id"],
+
+    decision_type="TRUTH_CONFIDENCE",
+
+    reference_id=delivery["id"],
+
+    explanation=(
+        f"Computed confidence score "
+        f"{confidence}."
+    )
+
+)
         cursor.execute("""
             UPDATE deliveries
 
@@ -200,7 +216,6 @@ def correct_delivery(
     new_data=dict(updated)
 )
 
-
         conn.commit()
 
         return {
@@ -208,6 +223,21 @@ def correct_delivery(
             "delivery":updated
         }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
 
     finally:
 

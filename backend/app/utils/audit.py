@@ -1,3 +1,6 @@
+import json
+
+
 def create_audit_log(
     cursor,
     user_id,
@@ -36,7 +39,13 @@ def create_audit_log(
             action,
             entity_type,
             entity_id,
-            old_data,
-            new_data
+
+            json.dumps(old_data)
+            if old_data
+            else None,
+
+            json.dumps(new_data)
+            if new_data
+            else None
         )
     )

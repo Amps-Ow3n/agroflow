@@ -1,13 +1,10 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-import os
+from app.core.config import settings
 from fastapi import HTTPException
 
-load_dotenv()
-
 def get_db():
-    db_url = os.getenv("DATABASE_URL")
+    db_url = settings.DATABASE_URL
 
     if not db_url:
         raise HTTPException(

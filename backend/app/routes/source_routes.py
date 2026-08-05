@@ -16,6 +16,11 @@ from app.core.db import get_db
 from app.core.dependencies import require_supplier
 from fastapi import HTTPException
 from app.core.exceptions import AgroFlowException
+
+from app.utils.audit import (
+    create_audit_log
+)
+from app.core.logger import log_error
 router = APIRouter()
 
 @router.post("/source/register")
@@ -56,24 +61,70 @@ AND is_archived=FALSE
         detail="Duplicate supply source"
     )
         payload.product = payload.product.strip().lower()
+
         source_id = create_supply_source(
-            actor_id=user["id"],
-            actor_type=payload.actor_type,  
-            actor_name=db_user["name"],
-            payload=payload
-        )
+    actor_id=user["id"],
+    actor_type=payload.actor_type,  
+    actor_name=db_user["name"],
+    payload=payload
+)
+
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "CREATE_SOURCE",
+
+    "supply_source",
+
+    source_id,
+
+    old_data=None,
+
+    new_data={
+        "product": payload.product,
+        "quantity": payload.qty_available,
+        "location": payload.location
+    }
+
+)       
+        conn.commit()
 
         return {
             "message": "Source registered",
             "source_id": source_id
         }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="supply_source",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
+
     finally:
         conn.close()
 
 @router.get("/source/my-sources")
-def my_sources(user=Depends(require_source_actor)):
-    return get_sources_by_actor(user["id"])
+def my_sources(
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(require_source_actor)):
+    return get_sources_by_actor(user["id"],
+    limit,
+    offset
+    )
 
 @router.put("/source/{source_id}")
 def update_source(
@@ -116,6 +167,13 @@ def update_source(
         detail="Invalid availability period"
     )
         cursor.execute("""
+SELECT *
+FROM supply_sources
+WHERE id=%s
+""",(source_id,))
+
+        old_source = cursor.fetchone()
+        cursor.execute("""
             UPDATE supply_sources
             SET product=%s,
                 qty_available=%s,
@@ -133,9 +191,47 @@ def update_source(
             user["id"]
         ))
 
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "UPDATE_SOURCE",
+
+    "supply_source",
+
+    source_id,
+
+    old_data=dict(old_source),
+
+    new_data={
+        "product": payload.product,
+        "quantity": payload.qty_available,
+        "location": payload.location
+    }
+
+)
+
         conn.commit()
 
         return {"message": "Source updated"}
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="supply_source",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
 
     finally:
         conn.close()
@@ -167,10 +263,26 @@ def delete_source(
         if was_source_used(cursor, source_id):
 
             archive_source(
-                cursor,
-                source_id,
-                user["id"]
-            )
+    cursor,
+    source_id,
+    user["id"]
+)
+
+
+            create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "ARCHIVE_SOURCE",
+
+    "supply_source",
+
+    source_id
+
+)
+
 
             conn.commit()
 
@@ -182,13 +294,35 @@ def delete_source(
         # Never used -> hard delete
         # ------------------------
         cursor.execute("""
+SELECT *
+FROM supply_sources
+WHERE id=%s
+""",(source_id,))
+
+        deleted_source = cursor.fetchone()
+        cursor.execute("""
             DELETE FROM supply_sources
             WHERE id=%s
             AND actor_id=%s
         """, (
             source_id,
             user["id"]
-        ))
+        )) 
+        create_audit_log(
+
+    cursor,
+
+    user["id"],
+
+    "DELETE_SOURCE",
+
+    "supply_source",
+
+    source_id,
+
+    old_data=dict(deleted_source)
+
+)
 
         conn.commit()
 
@@ -196,11 +330,29 @@ def delete_source(
     "message":"Supply source deleted"
 }
 
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="supply_source",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise
+
     finally:
         conn.close()
 
 @router.get("/supplier/bottlenecks")
 def supplier_bottlenecks(
+    limit: int = 20,
+    offset: int = 0,
     user=Depends(require_supplier)
 ):
     conn, cursor = get_db()

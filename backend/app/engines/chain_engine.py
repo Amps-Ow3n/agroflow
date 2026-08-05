@@ -72,7 +72,35 @@ def build_procurement_chain(cursor, commitment_id):
         status = "FAILED"
     else:
         status = "PARTIALLY_FULFILLED"
+    log_decision(
 
+    cursor,
+
+    actor_id=supplier_id,
+
+    decision_type="CHAIN_BUILT",
+
+    reference_id=commitment_id,
+
+    explanation=(
+        f"Built procurement chain "
+        f"using {len(chain)} sources."
+    )
+
+)
+    log_decision(
+
+    cursor,
+
+    actor_id=supplier_id,
+
+    decision_type="CHAIN_FAILED",
+
+    reference_id=commitment_id,
+
+    explanation="Unable to allocate enough supply."
+
+)
     return {
         "status": status,
         "commitment_id": commitment_id,

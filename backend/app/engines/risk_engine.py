@@ -40,7 +40,22 @@ def calculate_chain_risk(cursor, commitment_id):
     )
 
     risk_level = classify_chain_risk(score)
+    log_decision(
 
+    cursor,
+
+    actor_id=supplier_id,
+
+    decision_type="CHAIN_RISK",
+
+    reference_id=commitment_id,
+
+    explanation=(
+        f"Calculated risk score "
+        f"{risk_score}."
+    )
+
+)
     return {
         "integrity": integrity,
         "hops": hops,

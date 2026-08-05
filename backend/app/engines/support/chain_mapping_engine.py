@@ -1,6 +1,5 @@
 from app.utils.validators import validate_required
 
-
 def check_source_exists(cursor, source_id):
     validate_required(source_id, "source_id")
 
