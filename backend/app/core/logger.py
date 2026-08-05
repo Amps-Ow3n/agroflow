@@ -56,18 +56,21 @@ def log_info(
     request_id="-",
     user_id="-",
     action="-",
-    entity="-"
+    entity="-",
+    extra=None
 ):
     logger.info(
-        message,
-        extra=_extra(
+    message,
+    extra={
+        **_extra(
             request_id,
             user_id,
             action,
             entity
-        )
-    )
-
+        ),
+        "details": extra or {}
+    }
+)
 
 # ======================================================
 # WARNING
@@ -78,17 +81,21 @@ def log_warning(
     request_id="-",
     user_id="-",
     action="-",
-    entity="-"
+    entity="-",
+    extra=None
 ):
     logger.warning(
-        message,
-        extra=_extra(
+    message,
+    extra={
+        **_extra(
             request_id,
             user_id,
             action,
             entity
-        )
-    )
+        ),
+        "details": extra or {}
+    }
+)
 
 # ======================================================
 # ERROR
