@@ -15,13 +15,10 @@ from app.models.commitments import (
 )
 
 from app.models.chains import (
-    create_chain_link
-)
-
-from app.models.chains import (
     insert_chain_link
 )
 
+from app.logs.decision_logger import log_decision
 def build_procurement_chain(cursor, commitment_id):
 
     commitment = get_commitment_by_id(
@@ -72,35 +69,32 @@ def build_procurement_chain(cursor, commitment_id):
         status = "FAILED"
     else:
         status = "PARTIALLY_FULFILLED"
+
     log_decision(
-
     cursor,
-
-    actor_id=supplier_id,
-
+    actor_id=commitment["supplier_id"],
     decision_type="CHAIN_BUILT",
-
     reference_id=commitment_id,
-
     explanation=(
-        f"Built procurement chain "
-        f"using {len(chain)} sources."
+        f"Built procurement chain using "
+        f"{len(allocations)} source(s). "
+        f"Allocated {total_allocated} of "
+        f"{promised} units."
     )
-
 )
-    log_decision(
+    if status != "FULLY_FULFILLED":
 
-    cursor,
-
-    actor_id=supplier_id,
-
-    decision_type="CHAIN_FAILED",
-
-    reference_id=commitment_id,
-
-    explanation="Unable to allocate enough supply."
-
-)
+        log_decision(
+        cursor,
+        actor_id=commitment["supplier_id"],
+        decision_type="CHAIN_FAILED",
+        reference_id=commitment_id,
+        explanation=(
+            f"Allocated {total_allocated} of "
+            f"{promised}. "
+            f"Shortfall {shortfall}."
+        )
+    )
     return {
         "status": status,
         "commitment_id": commitment_id,

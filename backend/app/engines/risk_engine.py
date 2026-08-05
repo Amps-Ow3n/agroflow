@@ -8,7 +8,7 @@ from app.engines.support.chain_risk_engine import (
     compute_dependency_risk_score,
     classify_chain_risk
 )
-
+from app.logs.decision_logger import log_decision
 def calculate_chain_risk(cursor, commitment_id):
     """
     Core risk contract.
@@ -40,22 +40,28 @@ def calculate_chain_risk(cursor, commitment_id):
     )
 
     risk_level = classify_chain_risk(score)
-    log_decision(
 
-    cursor,
+    cursor.execute("""
+    SELECT supplier_id
+    FROM supplier_commitments
+    WHERE id = %s
+""", (commitment_id,))
 
-    actor_id=supplier_id,
+    commitment = cursor.fetchone()
 
-    decision_type="CHAIN_RISK",
+    if commitment:
 
-    reference_id=commitment_id,
-
-    explanation=(
-        f"Calculated risk score "
-        f"{risk_score}."
+        log_decision(
+        cursor,
+        actor_id=commitment["supplier_id"],
+        decision_type="CHAIN_RISK",
+        reference_id=commitment_id,
+        explanation=(
+            f"Calculated chain risk "
+            f"score {score}. "
+            f"Risk level: {risk_level}."
+        )
     )
-
-)
     return {
         "integrity": integrity,
         "hops": hops,
