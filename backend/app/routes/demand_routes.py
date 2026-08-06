@@ -42,18 +42,20 @@ AND status='OPEN'
     
         cursor.execute("""
             INSERT INTO school_demands (
-                school_id,
-                product,
-                quantity,
-                delivery_start,
-                delivery_end
-            )
+    school_id,
+    product,
+    quantity,
+    location,
+    delivery_start,
+    delivery_end
+)
             VALUES (%s, %s, %s, %s, %s)
             RETURNING id
         """, (
             user["id"],
             payload["product"],
             payload["quantity"],
+            payload["location"],
             payload["delivery_start"],
             payload["delivery_end"]
         ))
@@ -74,7 +76,8 @@ AND status='OPEN'
 
     new_data={
         "product":payload["product"],
-        "quantity":payload["quantity"]
+        "quantity":payload["quantity"],
+        "location":payload["location"]
     }
 
 )
@@ -218,6 +221,7 @@ def update_demand(
             SET
                 product = %s,
                 quantity = %s,
+                location = %s,
                 delivery_start = %s,
                 delivery_end = %s
             WHERE id = %s
@@ -225,6 +229,7 @@ def update_demand(
         """, (
             payload["product"],
             payload["quantity"],
+            payload["location"],
             payload["delivery_start"],
             payload["delivery_end"],
             demand_id,
