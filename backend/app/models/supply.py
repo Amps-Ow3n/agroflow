@@ -99,5 +99,40 @@ def create_supply_source(
         payload.available_to
     )
 
-def get_sources_by_actor(actor_id):
-    return get_actor_sources(actor_id, limit=20, offset=0)
+def get_sources_by_actor(
+    actor_id,
+    limit=20,
+    offset=0
+):
+    conn, cursor = get_db()
+
+    cursor.execute("""
+        SELECT
+            s.*,
+
+            EXISTS (
+                SELECT 1
+                FROM procurement_chains pc
+                WHERE pc.source_id = s.id
+            ) AS used_in_chain
+
+        FROM supply_sources s
+
+        WHERE s.actor_id = %s
+
+        ORDER BY s.created_at DESC
+
+        LIMIT %s
+        OFFSET %s
+
+    """, (
+        actor_id,
+        limit,
+        offset
+    ))
+
+    sources = cursor.fetchall()
+
+    conn.close()
+
+    return sources
