@@ -5,11 +5,14 @@ from app.core.exceptions import AgroFlowException
 from app.engines.source_rules import owns_demand
 from app.utils.audit import create_audit_log
 from app.core.logger import log_error
+from app.schemas.demand_schema import DemandCreate
+from app.schemas.demand_schema import DemandUpdate
+
 router = APIRouter(tags=["Demands"])
 
 # SCHOOL creates demand
 @router.post("/school/demand/create")
-def create_demand(payload: dict, user=Depends(require_buyer)):
+def create_demand(payload: DemandCreate, user=Depends(require_buyer)):
     if payload.delivery_start > payload.delivery_end:
         raise HTTPException(
         status_code=400,
@@ -29,9 +32,9 @@ AND delivery_end=%s
 AND status='OPEN'
 """,(
     user["id"],
-    payload["product"],
-    payload["delivery_start"],
-    payload["delivery_end"]
+    payload.product,
+    payload.delivery_start,
+    payload.delivery_end
 ))
 
         if cursor.fetchone():
@@ -53,11 +56,11 @@ AND status='OPEN'
             RETURNING id
         """, (
             user["id"],
-            payload["product"],
-            payload["quantity"],
+            payload.product,
+            payload.quantity,
             payload["location"],
-            payload["delivery_start"],
-            payload["delivery_end"]
+            payload.delivery_start,
+            payload.delivery_end
         ))
 
         demand = cursor.fetchone()
@@ -75,9 +78,9 @@ AND status='OPEN'
     demand["id"],
 
     new_data={
-        "product":payload["product"],
-        "quantity":payload["quantity"],
-        "location":payload["location"]
+        "product":payload.product,
+        "quantity":payload.quantity,
+        "location":payload.location
     }
 
 )
@@ -159,7 +162,7 @@ OFFSET %s
 @router.put("/school/demand/{demand_id}")
 def update_demand(
     demand_id: int,
-    payload: dict,
+    payload: DemandUpdate,
     user=Depends(require_buyer)
 ):
     conn, cursor = get_db()
@@ -227,11 +230,11 @@ def update_demand(
             WHERE id = %s
             AND school_id = %s
         """, (
-            payload["product"],
-            payload["quantity"],
-            payload["location"],
-            payload["delivery_start"],
-            payload["delivery_end"],
+            payload.product,
+            payload.quantity,
+            payload.location,
+            payload.delivery_start,
+            payload.delivery_end,
             demand_id,
             user["id"]
         ))
