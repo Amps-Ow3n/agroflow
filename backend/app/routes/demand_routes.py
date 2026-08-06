@@ -58,7 +58,7 @@ AND status='OPEN'
             user["id"],
             payload.product,
             payload.quantity,
-            payload["location"],
+            payload.location,
             payload.delivery_start,
             payload.delivery_end
         ))
