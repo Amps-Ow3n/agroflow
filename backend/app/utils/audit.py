@@ -40,11 +40,17 @@ def create_audit_log(
             entity_type,
             entity_id,
 
-            json.dumps(old_data)
+            json.dumps(
+    old_data,
+    default=str
+)
             if old_data
             else None,
 
-            json.dumps(new_data)
+            json.dumps(
+    new_data,
+    default=str
+)
             if new_data
             else None
         )
