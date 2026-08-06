@@ -41,7 +41,7 @@ def create_source(
     conn.commit()
     conn.close()
 
-    return source
+    return source["id"]
 
 def get_actor_sources(actor_id):
     conn, cursor = get_db()
