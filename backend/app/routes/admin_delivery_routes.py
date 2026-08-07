@@ -78,7 +78,6 @@ def correct_delivery(
 
     conn,cursor=get_db()
 
-
     try:
 
         cursor.execute("""
@@ -87,28 +86,27 @@ def correct_delivery(
             WHERE id=%s
         """,(delivery_id,))
 
-        delivery=cursor.fetchone()
+        delivery = cursor.fetchone()
+
+        if not delivery:
+            raise HTTPException(
+        status_code=404,
+        detail="Delivery not found"
+    )
 
         received_qty = payload.get(
-                    "received_qty",
-                    delivery["received_qty"]
-                )
-        
+    "received_qty",
+    delivery["received_qty"]
+)
+
         if (
-           received_qty is not None
-           and
-           received_qty > delivery["delivered_qty"]
+    received_qty is not None
+    and received_qty > delivery["delivered_qty"]
 ):
-           raise HTTPException(
+            raise HTTPException(
         status_code=400,
         detail="Received quantity cannot exceed delivered quantity"
     )
-        if not delivery:
-
-            raise HTTPException(
-                status_code=404,
-                detail="Delivery not found"
-            )
 
         if received_qty is not None:
             received_qty = int(received_qty)

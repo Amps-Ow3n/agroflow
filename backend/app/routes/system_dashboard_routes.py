@@ -208,25 +208,29 @@ def system_failure_map(
 
     try:
         cursor.execute("""
-            SELECT
-                d.commitment_id,
-                d.verification_status,
-                d.quality_status,
-                d.delay_status,
-                s.name AS supplier_name,
-                sch.name AS school_name
-            FROM deliveries d
-            JOIN supplier_commitments sc
-                ON d.commitment_id = sc.id
-            JOIN users s
-                ON sc.supplier_id = s.id
-            JOIN users sch
-                ON sc.school_id = sch.id
-            WHERE
-                d.verification_status = 'REJECTED'
-                OR d.quality_status = 'FAILED'
-                OR d.delay_status = 'DELAYED'
-        """ (limit, offset))
+    SELECT
+        d.id AS delivery_id,
+        d.commitment_id,
+        d.verification_status,
+        d.quality_status,
+        d.delay_status,
+        s.name AS supplier_name,
+        sch.name AS school_name
+    FROM deliveries d
+    JOIN supplier_commitments sc
+        ON d.commitment_id = sc.id
+    JOIN users s
+        ON sc.supplier_id = s.id
+    JOIN users sch
+        ON sc.school_id = sch.id
+    WHERE
+        d.verification_status = 'REJECTED'
+        OR d.quality_status = 'FAILED'
+        OR d.delay_status = 'DELAYED'
+    ORDER BY d.id DESC
+    LIMIT %s
+    OFFSET %s
+""", (limit, offset))
 
         rows = cursor.fetchall()
         results = []
@@ -250,12 +254,13 @@ def system_failure_map(
                 severity = "UNKNOWN"
 
             results.append({
-                "commitment_id": row["commitment_id"],
-                "failure_type": failure_type,
-                "severity": severity,
-                "supplier": row["supplier_name"],
-                "school": row["school_name"]
-            })
+    "delivery_id": row["delivery_id"],
+    "commitment_id": row["commitment_id"],
+    "failure_type": failure_type,
+    "severity": severity,
+    "supplier": row["supplier_name"],
+    "school": row["school_name"]
+})
 
         return results
 
@@ -271,26 +276,24 @@ def system_bottlenecks(
 
     try:
         cursor.execute("""
-            SELECT
-
-s.id,
-
-s.actor_name,
-
-s.product,
-
-s.qty_available,
-
-COALESCE(SUM(pc.allocated_qty),0) AS allocated
-            FROM supply_sources s
-            LEFT JOIN procurement_chains pc
-            ON pc.source_id = s.id
-            GROUP BY
-s.id,
-s.actor_name,
-s.product,
-s.qty_available
-        """ (limit, offset))
+    SELECT
+        s.id,
+        s.actor_name,
+        s.product,
+        s.qty_available,
+        COALESCE(SUM(pc.allocated_qty), 0) AS allocated
+    FROM supply_sources s
+    LEFT JOIN procurement_chains pc
+        ON pc.source_id = s.id
+    GROUP BY
+        s.id,
+        s.actor_name,
+        s.product,
+        s.qty_available
+    ORDER BY s.id DESC
+    LIMIT %s
+    OFFSET %s
+""", (limit, offset))
 
         rows = cursor.fetchall()
 
@@ -333,34 +336,23 @@ def get_truth_ledger(
     conn,cursor=get_db()
 
     try:
-
         cursor.execute("""
-            SELECT
-
-                d.*,
-
-                c.product,
-
-                s.name AS supplier_name,
-
-                sch.name AS school_name
-
-            FROM deliveries d
-
-            JOIN supplier_commitments c
-            ON d.commitment_id=c.id
-
-            JOIN users s
-            ON c.supplier_id=s.id
-
-            JOIN users sch
-            ON c.school_id=sch.id
-
-            ORDER BY d.created_at DESC
-            LIMIT %s
-OFFSET %s
-
-        """ (limit, offset))
+    SELECT
+        d.*,
+        c.product,
+        s.name AS supplier_name,
+        sch.name AS school_name
+    FROM deliveries d
+    JOIN supplier_commitments c
+        ON d.commitment_id = c.id
+    JOIN users s
+        ON c.supplier_id = s.id
+    JOIN users sch
+        ON c.school_id = sch.id
+    ORDER BY d.created_at DESC
+    LIMIT %s
+    OFFSET %s
+""", (limit, offset))
 
         return cursor.fetchall()
 
