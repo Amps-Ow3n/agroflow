@@ -194,7 +194,7 @@ ON u.id = sc.school_id
 
 WHERE sc.supplier_id=%s
 
-ORDER BY sc.created_at DESC;
+ORDER BY sc.created_at DESC
 LIMIT %s
 OFFSET %s
         """, (user["id"], limit, offset))
