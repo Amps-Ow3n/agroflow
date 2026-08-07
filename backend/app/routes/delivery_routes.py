@@ -54,13 +54,13 @@ def verify_delivery(
             conn.close()
             raise HTTPException(404, "No pending delivery")
 
-        confidence = compute_truth_confidence(
-        payload.verification_status,
-        payload.quality_status,
-        payload.delay_status
-    )
-        print("CONFIDENCE TYPE:", type(confidence))
-        print("CONFIDENCE VALUE:", confidence)
+        confidence_result = compute_truth_confidence(
+    payload.verification_status,
+    payload.quality_status,
+    payload.delay_status
+)
+
+        confidence_score = confidence_result["score"]
         log_decision(
 
     cursor,
@@ -72,9 +72,9 @@ def verify_delivery(
     reference_id=delivery["id"],
 
     explanation=(
-        f"Computed confidence score "
-        f"{confidence}."
-    )
+    f"Confidence score: {confidence_score}. "
+    f"Factors: {confidence_result['factors']}"
+)
 
 )
         validate_verified_delivery(
@@ -89,7 +89,7 @@ def verify_delivery(
     delivery["id"],
     payload,
     user["id"],
-    confidence
+    confidence_score
 )
         create_audit_log(
 
@@ -117,7 +117,7 @@ def verify_delivery(
         return {
     "message":"Delivery verified",
     "delivery":updated_delivery,
-    "confidence_score":confidence
+    "confidence_score":confidence_score
 }
 
     except Exception as e:
