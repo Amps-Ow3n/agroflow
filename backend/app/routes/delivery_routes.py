@@ -59,7 +59,8 @@ def verify_delivery(
         payload.quality_status,
         payload.delay_status
     )
-    
+        print("CONFIDENCE TYPE:", type(confidence))
+        print("CONFIDENCE VALUE:", confidence)
         log_decision(
 
     cursor,
