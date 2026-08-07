@@ -132,8 +132,8 @@ def get_commitment_deliveries(commitment_id):
 
     return deliveries
 
-def get_latest_pending_delivery(cursor, commitment_id, limit=20,
-    offset=0):
+def get_latest_pending_delivery(cursor, commitment_id):
+
     cursor.execute("""
         SELECT *
         FROM deliveries
@@ -141,7 +141,9 @@ def get_latest_pending_delivery(cursor, commitment_id, limit=20,
         AND verification_status IS NULL
         ORDER BY id DESC
         LIMIT 1
-    """, (commitment_id, limit, offset))
+    """, (
+        commitment_id,
+    ))
 
     return cursor.fetchone()
 
@@ -156,10 +158,12 @@ def verify_delivery_record(
 ):
     # Step 1: Load current delivery
     cursor.execute("""
-        SELECT delivered_qty
-        FROM deliveries
-        WHERE id = %s
-    """, (delivery_id, limit, offset))
+    SELECT delivered_qty
+    FROM deliveries
+    WHERE id = %s
+""", (
+    delivery_id,
+))
 
     delivery = cursor.fetchone()
 
