@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Optional
 
 class DeliveryLogCreate(BaseModel):
-
+    commitment_id: int
     delivered_qty: int = Field(
         ...,
         gt=0
