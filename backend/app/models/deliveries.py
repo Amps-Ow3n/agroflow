@@ -152,31 +152,32 @@ def verify_delivery_record(
     delivery_id,
     payload,
     verified_by,
-    confidence,
-    limit=20,
-    offset=0
+    confidence
 ):
-    # Step 1: Load current delivery
+
+    # Step 1: Load delivery
     cursor.execute("""
-    SELECT delivered_qty
-    FROM deliveries
-    WHERE id = %s
-""", (
-    delivery_id,
-))
+        SELECT delivered_qty
+        FROM deliveries
+        WHERE id = %s
+    """, (
+        delivery_id,
+    ))
 
     delivery = cursor.fetchone()
 
     if not delivery:
         raise Exception("Delivery not found")
 
-    # Step 2: Enforce the invariant
+
+    # Step 2: Business rule
     if payload.received_qty > delivery["delivered_qty"]:
         raise Exception(
             "Received quantity cannot exceed delivered quantity."
         )
 
-    # Step 3: Update
+
+    # Step 3: Update verified truth record
     cursor.execute("""
         UPDATE deliveries
         SET
