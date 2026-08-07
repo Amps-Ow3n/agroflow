@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.db import get_db
 from app.core.dependencies import require_buyer
+from app.core.dependencies import require_supplier
 from app.core.exceptions import AgroFlowException
 from app.engines.source_rules import owns_demand
 from app.utils.audit import create_audit_log
@@ -27,16 +28,17 @@ SELECT id
 FROM school_demands
 WHERE school_id=%s
 AND product=%s
+AND location=%s
 AND delivery_start=%s
 AND delivery_end=%s
 AND status='OPEN'
 """,(
-    user["id"],
-    payload.product,
-    payload.delivery_start,
-    payload.delivery_end
+user["id"],
+payload.product,
+payload.location,
+payload.delivery_start,
+payload.delivery_end
 ))
-
         if cursor.fetchone():
             raise HTTPException(
         status_code=409,
@@ -52,7 +54,7 @@ AND status='OPEN'
     delivery_start,
     delivery_end
 )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             user["id"],
@@ -140,6 +142,7 @@ OFFSET %s
 def get_open_demands(
     limit: int = 20,
     offset: int = 0,
+    user=Depends(require_supplier)
 ):
     conn, cursor = get_db()
 
@@ -152,7 +155,7 @@ def get_open_demands(
             ORDER BY d.created_at DESC
             LIMIT %s
 OFFSET %s
-        """(limit, offset))
+        """, (limit, offset))
 
         return cursor.fetchall()
 
@@ -251,7 +254,7 @@ def update_demand(
 
     demand_id,
 
-    new_data=payload
+    new_data=payload.model_dump(mode="json")
 
 )
         conn.commit()
