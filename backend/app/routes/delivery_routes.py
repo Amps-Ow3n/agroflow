@@ -241,7 +241,7 @@ WHERE commitment_id=%s
 AND week_start=%s
 AND week_end=%s
 """,(
-    payload.commitment_id,
+    commitment_id,
     payload.week_start,
     payload.week_end
 ))
