@@ -90,24 +90,37 @@ def correct_delivery(
 
         if not delivery:
             raise HTTPException(
-        status_code=404,
-        detail="Delivery not found"
-    )
+                status_code=404,
+                detail="Delivery not found"
+            )
 
         received_qty = payload.get(
-    "received_qty",
-    delivery["received_qty"]
-)
+            "received_qty",
+            delivery["received_qty"]
+        )
 
+        # Normalize the API boundary value before
+        # performing numeric business-rule comparisons.
+        if received_qty is not None:
+            try:
+                received_qty = int(received_qty)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Received quantity must be a valid number"
+                )
+
+        # Core invariant:
+        # a school cannot verify receiving more than
+        # the supplier reported delivering.
         if (
-    received_qty is not None
-    and received_qty > delivery["delivered_qty"]
-):
+            received_qty is not None
+            and received_qty > delivery["delivered_qty"]
+        ):
             raise HTTPException(
-        status_code=400,
-        detail="Received quantity cannot exceed delivered quantity"
-    )
-
+                status_code=400,
+                detail="Received quantity cannot exceed delivered quantity"
+            )
         if received_qty is not None:
             received_qty = int(received_qty)
 
