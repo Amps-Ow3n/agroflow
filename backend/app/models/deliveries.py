@@ -1,5 +1,5 @@
 from app.core.db import get_db
-
+from fastapi import HTTPException
 def log_delivery(
     commitment_id,
     delivered_qty,
@@ -172,10 +172,10 @@ def verify_delivery_record(
 
     # Step 2: Business rule
     if payload.received_qty > delivery["delivered_qty"]:
-        raise Exception(
-            "Received quantity cannot exceed delivered quantity."
-        )
-
+        raise HTTPException(
+        status_code=400,
+        detail="Received quantity cannot exceed delivered quantity."
+    )
 
     # Step 3: Update verified truth record
     cursor.execute("""

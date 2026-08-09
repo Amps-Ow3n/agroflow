@@ -120,21 +120,28 @@ def verify_delivery(
     "confidence_score":confidence_score
 }
 
+    except HTTPException:
+        conn.rollback()
+        raise
+
     except Exception as e:
 
         conn.rollback()
 
         log_error(
-        message="Database transaction failed",
-        user_id=user["id"],
-        action="DATABASE_ERROR",
-        entity="delivery",
-        extra={
-            "exception": str(e)
-        }
-    )
+            message="Database transaction failed",
+            user_id=user["id"],
+            action="DATABASE_ERROR",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
 
-        raise
+        raise HTTPException(
+            status_code=500,
+            detail="Verification failed due to a server error."
+        )
 
     finally:
 
