@@ -11,7 +11,6 @@ def check_source_exists(cursor, source_id):
 
     return cursor.fetchone() is not None
 
-
 def check_duplicate_source_usage(
     cursor,
     source_id,

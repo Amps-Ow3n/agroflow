@@ -83,30 +83,40 @@ def get_chain(
 
     try:
         cursor.execute("""
-            SELECT
-                pc.id,
-                pc.commitment_id,
-                pc.source_id,
-                pc.allocated_qty,
-                pc.chain_position,
+    SELECT
+        pc.id,
+        pc.commitment_id,
+        pc.source_id,
+        pc.allocated_qty,
+        pc.chain_position,
 
-                ss.actor_name,
-                ss.actor_type,
-                ss.product,
-                ss.location
+        ss.actor_name,
+        ss.actor_type,
+        ss.product,
+        ss.location
 
-            FROM procurement_chains pc
+    FROM procurement_chains pc
 
-            JOIN supply_sources ss
-            ON pc.source_id = ss.id
+    JOIN supply_sources ss
+    ON pc.source_id = ss.id
 
-            WHERE pc.commitment_id = %s
+    WHERE pc.commitment_id = %s
 
-            ORDER BY pc.chain_position ASC
+    ORDER BY pc.chain_position ASC
 
-        """, (commitment_id,))
+""", (commitment_id,))
 
-        return cursor.fetchall()
+        chain = cursor.fetchall()
+
+        risk = calculate_chain_risk(
+    cursor,
+    commitment_id
+)
+
+        return {
+    "chain": chain,
+    "risk": risk
+}
 
     except HTTPException:
         raise

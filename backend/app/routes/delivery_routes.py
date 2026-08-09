@@ -300,6 +300,365 @@ AND week_end=%s
     finally:
         conn.close()
 
+@router.put("/supplier/delivery/{delivery_id}")
+def edit_supplier_delivery(
+    delivery_id: int,
+    payload: DeliveryLogCreate,
+    user=Depends(require_supplier)
+):
+    conn, cursor = get_db()
+
+    try:
+
+        # =====================================================
+        # LOAD DELIVERY + OWNERSHIP
+        # =====================================================
+
+        cursor.execute("""
+            SELECT
+                d.*,
+                c.supplier_id
+            FROM deliveries d
+
+            JOIN supplier_commitments c
+            ON d.commitment_id = c.id
+
+            WHERE d.id = %s
+        """, (delivery_id,))
+
+        delivery = cursor.fetchone()
+
+        if not delivery:
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery not found"
+            )
+
+        if delivery["supplier_id"] != user["id"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot edit another supplier's delivery"
+            )
+
+        # =====================================================
+        # VERIFIED RECORDS ARE NOT SILENTLY OVERWRITTEN
+        # =====================================================
+
+        if delivery["verification_status"] in (
+            "VERIFIED",
+            "PARTIAL"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This delivery has already been verified. "
+                    "A verified delivery must be corrected through "
+                    "the verification correction process."
+                )
+            )
+
+        # =====================================================
+        # UPDATE SUPPLIER'S DELIVERY ENTRY
+        # =====================================================
+
+        cursor.execute("""
+            UPDATE deliveries
+            SET
+                delivered_qty = %s,
+                week_start = %s,
+                week_end = %s
+            WHERE id = %s
+            RETURNING *
+        """, (
+            payload.delivered_qty,
+            payload.week_start,
+            payload.week_end,
+            delivery_id
+        ))
+
+        updated = cursor.fetchone()
+
+        create_audit_log(
+            cursor,
+            user["id"],
+            "EDIT_DELIVERY",
+            "delivery",
+            delivery_id,
+            old_data=dict(delivery),
+            new_data=dict(updated)
+        )
+
+        conn.commit()
+
+        return {
+            "message": "Delivery updated",
+            "delivery": updated
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Supplier delivery edit failed",
+            user_id=user["id"],
+            action="EDIT_DELIVERY",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update delivery."
+        )
+
+    finally:
+        conn.close()
+
+@router.delete("/supplier/delivery/{delivery_id}")
+def delete_supplier_delivery(
+    delivery_id: int,
+    user=Depends(require_supplier)
+):
+    conn, cursor = get_db()
+
+    try:
+
+        cursor.execute("""
+            SELECT
+                d.*,
+                c.supplier_id
+            FROM deliveries d
+
+            JOIN supplier_commitments c
+            ON d.commitment_id = c.id
+
+            WHERE d.id = %s
+        """, (delivery_id,))
+
+        delivery = cursor.fetchone()
+
+        if not delivery:
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery not found"
+            )
+
+        if delivery["supplier_id"] != user["id"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot delete another supplier's delivery"
+            )
+
+        if delivery["verification_status"] in (
+            "VERIFIED",
+            "PARTIAL"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Verified deliveries cannot be deleted. "
+                    "Use the correction process instead."
+                )
+            )
+
+        create_audit_log(
+            cursor,
+            user["id"],
+            "DELETE_DELIVERY",
+            "delivery",
+            delivery_id,
+            old_data=dict(delivery)
+        )
+
+        cursor.execute("""
+            DELETE FROM deliveries
+            WHERE id = %s
+        """, (delivery_id,))
+
+        conn.commit()
+
+        return {
+            "message": "Delivery deleted",
+            "delivery_id": delivery_id
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Supplier delivery deletion failed",
+            user_id=user["id"],
+            action="DELETE_DELIVERY",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete delivery."
+        )
+
+    finally:
+        conn.close()
+
+@router.put("/delivery/verification/{delivery_id}")
+def correct_delivery_verification(
+    delivery_id: int,
+    payload: DeliveryVerify,
+    user=Depends(require_buyer)
+):
+    conn, cursor = get_db()
+
+    try:
+
+        cursor.execute("""
+            SELECT
+                d.*,
+                c.school_id
+            FROM deliveries d
+
+            JOIN supplier_commitments c
+            ON d.commitment_id = c.id
+
+            WHERE d.id = %s
+        """, (delivery_id,))
+
+        delivery = cursor.fetchone()
+
+        if not delivery:
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery not found"
+            )
+
+        if delivery["school_id"] != user["id"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Not your delivery"
+            )
+
+        # The school may correct the verification truth,
+        # but may not alter the supplier's delivered quantity.
+        if payload.received_qty > delivery["delivered_qty"]:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Received quantity cannot exceed "
+                    "delivered quantity."
+                )
+            )
+
+        confidence_result = compute_truth_confidence(
+            payload.verification_status,
+            payload.quality_status,
+            payload.delay_status
+        )
+
+        confidence_score = confidence_result["score"]
+
+        validate_verified_delivery(
+            payload.verification_status,
+            payload.received_qty,
+            payload.quality_status,
+            payload.delay_status
+        )
+
+        log_decision(
+            cursor,
+            actor_id=user["id"],
+            decision_type="TRUTH_CONFIDENCE_CORRECTION",
+            reference_id=delivery_id,
+            explanation=(
+                f"Verification corrected. "
+                f"Confidence score: {confidence_score}. "
+                f"Factors: {confidence_result['factors']}"
+            )
+        )
+
+        cursor.execute("""
+            UPDATE deliveries
+            SET
+                received_qty = %s,
+                quality_status = %s,
+                delay_status = %s,
+                verification_status = %s,
+                verification_notes = %s,
+                verified_by = %s,
+                confidence_score = %s,
+                verified_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING *
+        """, (
+            payload.received_qty,
+            payload.quality_status,
+            payload.delay_status,
+            payload.verification_status,
+            payload.verification_notes,
+            user["id"],
+            confidence_score,
+            delivery_id
+        ))
+
+        updated = cursor.fetchone()
+
+        create_audit_log(
+            cursor,
+            user["id"],
+            "CORRECT_DELIVERY_VERIFICATION",
+            "delivery",
+            delivery_id,
+            old_data=dict(delivery),
+            new_data=dict(updated)
+        )
+
+        conn.commit()
+
+        return {
+            "message": "Delivery verification corrected",
+            "delivery": updated,
+            "confidence_score": confidence_score
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Delivery verification correction failed",
+            user_id=user["id"],
+            action="CORRECT_DELIVERY_VERIFICATION",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to correct delivery verification."
+        )
+
+    finally:
+        conn.close()
+
 @router.get("/supplier/deliveries")
 def supplier_deliveries(
     limit: int = 20,
@@ -307,3 +666,97 @@ def supplier_deliveries(
     user=Depends(require_supplier)
 ):
     return get_supplier_deliveries(user["id"], limit, offset)
+
+@router.delete("/delivery/verification/{delivery_id}")
+def reset_delivery_verification(
+    delivery_id: int,
+    user=Depends(require_buyer)
+):
+    conn, cursor = get_db()
+
+    try:
+
+        cursor.execute("""
+            SELECT
+                d.*,
+                c.school_id
+            FROM deliveries d
+
+            JOIN supplier_commitments c
+            ON d.commitment_id = c.id
+
+            WHERE d.id = %s
+        """, (delivery_id,))
+
+        delivery = cursor.fetchone()
+
+        if not delivery:
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery not found"
+            )
+
+        if delivery["school_id"] != user["id"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Not your delivery"
+            )
+
+        create_audit_log(
+            cursor,
+            user["id"],
+            "RESET_DELIVERY_VERIFICATION",
+            "delivery",
+            delivery_id,
+            old_data=dict(delivery)
+        )
+
+        cursor.execute("""
+            UPDATE deliveries
+            SET
+                received_qty = NULL,
+                quality_status = NULL,
+                delay_status = NULL,
+                verification_status = NULL,
+                verification_notes = NULL,
+                verified_by = NULL,
+                confidence_score = NULL,
+                verified_at = NULL
+            WHERE id = %s
+            RETURNING *
+        """, (delivery_id,))
+
+        updated = cursor.fetchone()
+
+        conn.commit()
+
+        return {
+            "message": "Delivery verification reset",
+            "delivery": updated
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception as e:
+
+        conn.rollback()
+
+        log_error(
+            message="Delivery verification reset failed",
+            user_id=user["id"],
+            action="RESET_DELIVERY_VERIFICATION",
+            entity="delivery",
+            extra={
+                "exception": str(e)
+            }
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to reset delivery verification."
+        )
+
+    finally:
+        conn.close()

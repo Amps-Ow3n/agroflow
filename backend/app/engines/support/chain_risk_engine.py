@@ -27,14 +27,34 @@ def compute_dependency_risk_score(
     hops,
     transition_risk
 ):
+    """
+    Structural dependency risk.
+
+    A single-source, single-hop chain should not
+    automatically become medium risk simply because
+    it contains one allocation.
+
+    Hops represent complexity.
+    Transition risk represents dependency between
+    different actors/sources.
+    """
+
     hops = hops or 0
     transition_risk = transition_risk or 0
 
+    if hops <= 1:
+        hop_score = 0
+    elif hops <= 3:
+        hop_score = 10
+    else:
+        hop_score = 20
+
+    transition_score = transition_risk * 20
+
     return round(
-    (hops * 10) +
-    (transition_risk * 20),
-    2
-)
+        hop_score + transition_score,
+        2
+    )
 
 def classify_chain_risk(score):
 
@@ -48,10 +68,18 @@ def classify_chain_risk(score):
 
 def compute_chain_risk_summary(
     hops,
-    transition_risk
+    transition_risk,
+    promised_qty=None,
+    allocated_qty=None,
+    shortfall=None
 ):
     """
     Produces explainable chain-risk output.
+
+    Risk interpretation distinguishes:
+    - structural complexity
+    - supply shortfall
+    - dependency risk
     """
 
     score = compute_dependency_risk_score(
@@ -63,27 +91,59 @@ def compute_chain_risk_summary(
 
     reasons = []
 
-    if hops > 2:
+    # =====================================================
+    # FULFILLMENT RISK
+    # =====================================================
+
+    if shortfall is not None and shortfall > 0:
+
         reasons.append(
-            "Multiple supply allocation points increase chain complexity."
+            f"Procurement chain has a shortfall of "
+            f"{shortfall} units."
+        )
+
+    # =====================================================
+    # STRUCTURAL RISK
+    # =====================================================
+
+    if hops > 3:
+
+        reasons.append(
+            "Multiple allocation points increase "
+            "chain complexity."
         )
 
     if transition_risk > 0.3:
+
         reasons.append(
-            "Several source transitions increase dependency risk."
+            "Several source transitions increase "
+            "dependency risk."
         )
+
+    # =====================================================
+    # POSITIVE INTERPRETATION
+    # =====================================================
 
     if not reasons:
-        reasons.append(
-            "No significant structural risk detected."
-        )
+
+        if (
+            shortfall is not None
+            and shortfall == 0
+        ):
+
+            reasons.append(
+                "Commitment is fully allocated with "
+                "no significant structural chain risk."
+            )
+
+        else:
+
+            reasons.append(
+                "No significant structural risk detected."
+            )
 
     return {
-
         "score": score,
-
         "risk_level": risk_level,
-
         "reasons": reasons
-
     }

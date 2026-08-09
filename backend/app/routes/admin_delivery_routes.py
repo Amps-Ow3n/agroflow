@@ -142,16 +142,44 @@ def correct_delivery(
                 detail="Received quantity cannot be negative"
             )
 
-        if (
-            received_qty is not None
-            and delivered_qty is not None
-            and received_qty > delivered_qty
-        ):
+        # =====================================================
+        # QUANTITY BUSINESS RULES
+        # =====================================================
+
+        if delivered_qty is not None and delivered_qty < 0:
 
             raise HTTPException(
-                status_code=400,
-                detail="Received quantity cannot exceed delivered quantity"
-            )
+        status_code=400,
+        detail="Delivered quantity cannot be negative"
+    )
+
+        if received_qty is not None and received_qty < 0:
+
+            raise HTTPException(
+        status_code=400,
+        detail="Received quantity cannot be negative"
+    )
+
+     # Physical truth invariant:
+     # quantity received cannot exceed quantity actually delivered.
+     # This does NOT prevent an administrator from correcting
+     # delivered_qty upward when the original delivery entry
+     # was wrong. It only prevents an impossible relationship.
+
+        if (
+    received_qty is not None
+    and delivered_qty is not None
+    and received_qty > delivered_qty
+):
+
+            raise HTTPException(
+        status_code=400,
+        detail=(
+            "Received quantity cannot exceed delivered quantity. "
+            "Correct the delivered quantity first if the original "
+            "delivery record was entered incorrectly."
+        )
+    )
 
         # =====================================================
         # OTHER TRUTH FIELDS
