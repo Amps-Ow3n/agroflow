@@ -1,10 +1,13 @@
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from fastapi.responses import FileResponse
-from app.core.dependencies import require_user
+from app.core.dependencies import require_user, require_evidence_upload
 from app.core.db import get_db
 from app.core.authorization import membership_has_permission
 from app.services.evidence_security_service import safe_evidence_path
+from app.services.evidence_document_service import create_evidence_document
+from app.core.config import settings
+from app.core.transactions import write_transaction
 
 router = APIRouter(tags=["Evidence"])
 
@@ -21,6 +24,33 @@ def _evidence_context(cursor, evidence_id):
         WHERE ed.id = %s
     """, (evidence_id,))
     return cursor.fetchone()
+
+
+@router.post("/evidence/{procurement_id}/upload", status_code=201)
+def upload_evidence(
+    procurement_id: int,
+    document_type: str = Form(...),
+    visibility: str = Form("INTERNAL"),
+    event_id: int | None = Form(None),
+    file: UploadFile = File(...),
+    user=Depends(require_evidence_upload),
+):
+    conn, cursor = get_db()
+    try:
+        with write_transaction(conn):
+            evidence = create_evidence_document(
+                cursor,
+                settings.EVIDENCE_STORAGE_DIR,
+                procurement_id,
+                user["user"]["id"],
+                file,
+                document_type,
+                visibility,
+                event_id,
+            )
+            return {"evidence": evidence}
+    finally:
+        conn.close()
 
 
 @router.get("/evidence/{evidence_id}/download")

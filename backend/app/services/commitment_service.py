@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from app.models.procurement_events import record_audit_event, record_procurement_event
 from app.services.procurement_service import transition_procurement
+from app.services.domain_invariants import validate_commitment_quantity
 
 
 def _supplier_for_user(cursor,user_id):
@@ -30,7 +31,7 @@ def create_commitment(cursor,user_id,order_id,payload):
     line=get_order_line_for_supplier(cursor,order_id,payload.purchase_order_line_id,supplier["id"],for_update=True)
     if not line: raise HTTPException(404,"Purchase order line not found for this supplier.")
     if line["po_status"]!="ISSUED" or line["procurement_status"]!="ORDERED": raise HTTPException(409,"Only an issued purchase order for an ORDERED procurement can receive a commitment.")
-    if payload.promised_qty>line["quantity"]: raise HTTPException(409,"Committed quantity cannot exceed the purchase order line quantity.")
+    validate_commitment_quantity(payload.promised_qty, line["quantity"])
 
     cursor.execute("""SELECT id FROM supplier_commitments WHERE purchase_order_line_id=%s AND supplier_id=%s
                       AND status IN ('SUBMITTED','ACCEPTED') FOR UPDATE""",(line["purchase_order_line_id"],supplier["id"]))

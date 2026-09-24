@@ -275,6 +275,16 @@ def save_uploaded_file(
                     missing_ok=True
                 )
 
+                # Do not leave empty procurement/evidence directories behind
+                # after rejecting an oversized upload. The file itself is the
+                # security boundary, but cleanup keeps failed attacks from
+                # accumulating filesystem clutter.
+                for directory in (physical_path.parent, physical_path.parent.parent):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+
                 raise HTTPException(
                     status_code=413,
                     detail=(

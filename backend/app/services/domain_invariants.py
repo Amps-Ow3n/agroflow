@@ -308,3 +308,46 @@ def require_supplier_has_valid_organization(
         )
 
     return supplier_context
+
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def validate_commitment_quantity(committed_quantity, available_quantity):
+    """Validate that a commitment does not exceed available capacity."""
+    committed = Decimal(str(committed_quantity))
+    available = Decimal(str(available_quantity))
+
+    if committed < 0:
+        raise HTTPException(400, "Committed quantity cannot be negative.")
+    if available < 0:
+        raise HTTPException(400, "Available quantity cannot be negative.")
+    if committed > available:
+        raise HTTPException(409, "Committed quantity cannot exceed available capacity.")
+
+    return True
+
+
+def calculate_delivery_discrepancy(committed_quantity, received_quantity):
+    """Calculate deterministic delivery shortfall/overage and variance."""
+    committed = Decimal(str(committed_quantity))
+    received = Decimal(str(received_quantity))
+
+    if committed <= 0:
+        raise ValueError("Committed quantity must be greater than zero.")
+    if received < 0:
+        raise ValueError("Received quantity cannot be negative.")
+
+    difference = committed - received
+    shortfall = max(difference, Decimal("0"))
+    overage = max(-difference, Decimal("0"))
+    variance_rate = (abs(difference) / committed * Decimal("100")).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
+    return {
+        "committed_quantity": committed,
+        "received_quantity": received,
+        "shortfall": shortfall,
+        "overage": overage,
+        "variance_rate": variance_rate,
+    }

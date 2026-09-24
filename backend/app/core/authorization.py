@@ -423,6 +423,13 @@ def user_has_permission(
         if organization.get("status") != "ACTIVE":
             continue
 
+        # Organization-scoped authorization must not grant access to an
+        # unverified organization. Route-level checks are defense in depth;
+        # this central helper is also a security boundary for resource-level
+        # authorization tests and direct service callers.
+        if organization.get("verification_status") != "VERIFIED":
+            continue
+
         if membership.get("status") != "ACTIVE":
             continue
 
