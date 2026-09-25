@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.db import get_db
-from app.core.dependencies import require_purchase_order_create, require_purchase_order_view
+from app.core.dependencies import (
+    require_purchase_order_create,
+    require_purchase_order_view_by_procurement,
+)
 from app.core.transactions import write_transaction
 from app.schemas.procurement_schema import PurchaseOrderCreate
 from app.services.purchase_order_service import create_purchase_order
@@ -17,7 +20,7 @@ def create_order(procurement_id:int,payload:PurchaseOrderCreate,user=Depends(req
     finally: conn.close()
 
 @router.get("/procurements/{procurement_id}")
-def get_order(procurement_id:int,user=Depends(require_purchase_order_view)):
+def get_order(procurement_id:int,user=Depends(require_purchase_order_view_by_procurement)):
     conn,cursor=get_db()
     try:
         cursor.execute("""SELECT po.*,s.supplier_code,o.name AS supplier_name,creator.name AS created_by_name

@@ -2,9 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.db import get_db
 from app.core.dependencies import (
-    require_procurement_create, require_procurement_update,
-    require_procurement_submit, require_procurement_cancel,
-    require_procurement_transition, require_procurement_viewer,
+    require_procurement_create,
+    require_procurement_update,
+    require_procurement_submit,
+    require_procurement_cancel,
+    require_procurement_transition,
+    require_procurement_viewer,
+    require_procurement_list_viewer,
 )
 from app.core.transactions import write_transaction
 from app.schemas.procurement_schema import ProcurementCreate, ProcurementUpdate, ProcurementCancel, ProcurementTransition
@@ -29,7 +33,7 @@ def create(payload: ProcurementCreate, user=Depends(require_procurement_create))
 
 
 @router.get("")
-def list_procurements(status: str | None = Query(None), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), user=Depends(require_procurement_viewer)):
+def list_procurements(status: str | None = Query(None), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), user=Depends(require_procurement_list_viewer)):
     conn, cursor = get_db()
     try:
         params=[user["user"]["id"]]

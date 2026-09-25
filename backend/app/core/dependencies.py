@@ -778,6 +778,10 @@ require_procurement_viewer = require_permission(
     organization_type="SCHOOL",
 )
 
+require_procurement_list_viewer = require_permission(
+    PERMISSION_PROCUREMENT_VIEW,
+    organization_type="SCHOOL",
+)
 
 require_procurement_manager = require_permission(
     PERMISSION_PROCUREMENT_UPDATE,
@@ -862,6 +866,12 @@ require_procurement_transition = require_permission(
 require_purchase_order_view = require_permission(
     PERMISSION_PURCHASE_ORDER_VIEW,
     resource_type="purchase_order",
+)
+
+require_purchase_order_view_by_procurement = require_permission(
+    PERMISSION_PURCHASE_ORDER_VIEW,
+    resource_type="procurement",
+    organization_type="SCHOOL",
 )
 
 require_purchase_order_create = require_permission(
