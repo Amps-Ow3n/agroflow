@@ -6,6 +6,7 @@ from app.core.transactions import write_transaction
 from app.core.logger import log_warning
 from app.core.security import enforce_rate_limit, new_csrf_token
 from app.core.config import settings
+from app.core.dependencies import require_user
 from app.schemas.user_schema import UserRegister
 from app.services.identity_service import get_user_identity
 
@@ -72,10 +73,36 @@ def login(response: Response, request: Request, form_data: OAuth2PasswordRequest
         secure = settings.SESSION_COOKIE_SECURE
         response.set_cookie(settings.SESSION_COOKIE_NAME, token, httponly=True, secure=secure, samesite=settings.SESSION_COOKIE_SAMESITE, max_age=settings.SESSION_COOKIE_MAX_AGE, path="/")
         response.set_cookie(settings.CSRF_COOKIE_NAME, csrf, httponly=False, secure=secure, samesite=settings.SESSION_COOKIE_SAMESITE, max_age=settings.SESSION_COOKIE_MAX_AGE, path="/")
-        return {"authenticated": True, "token_type": "cookie"}
+        return {
+    "authenticated": True,
+    "token_type": "cookie",
+    "csrf_token": csrf,
+}
     finally:
         conn.close()
 
+@router.get("/csrf")
+def get_csrf_token(
+    request: Request,
+    response: Response,
+    user=Depends(require_user),
+):
+    csrf = request.cookies.get(settings.CSRF_COOKIE_NAME)
+
+    if not csrf:
+        csrf = new_csrf_token()
+
+        response.set_cookie(
+            settings.CSRF_COOKIE_NAME,
+            csrf,
+            httponly=False,
+            secure=settings.SESSION_COOKIE_SECURE,
+            samesite=settings.SESSION_COOKIE_SAMESITE,
+            max_age=settings.SESSION_COOKIE_MAX_AGE,
+            path="/",
+        )
+
+    return {"csrf_token": csrf}
 
 @router.post("/logout")
 def logout(response: Response):
