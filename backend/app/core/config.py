@@ -22,7 +22,13 @@ class Settings:
     SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "agroflow_access_token")
     CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "agroflow_csrf")
     SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "none")
-    SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", str(30 * 60)))
+    SESSION_COOKIE_SECURE = _bool(
+    "SESSION_COOKIE_SECURE",
+    ENVIRONMENT == "production"
+)
+    SESSION_COOKIE_MAX_AGE = int(
+    os.getenv("SESSION_COOKIE_MAX_AGE", str(30 * 60))
+)
     RATE_LIMIT_LOGIN_MAX = int(os.getenv("RATE_LIMIT_LOGIN_MAX", "10"))
     RATE_LIMIT_LOGIN_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_LOGIN_WINDOW_SECONDS", "300"))
     RATE_LIMIT_REGISTER_MAX = int(os.getenv("RATE_LIMIT_REGISTER_MAX", "5"))

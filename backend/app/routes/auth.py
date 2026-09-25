@@ -69,7 +69,7 @@ def login(response: Response, request: Request, form_data: OAuth2PasswordRequest
             raise HTTPException(403, "User organization identity is not configured.")
         token = create_access_token({"id": user["id"]})
         csrf = new_csrf_token()
-        secure = settings.ENVIRONMENT == "production"
+        secure = settings.SESSION_COOKIE_SECURE
         response.set_cookie(settings.SESSION_COOKIE_NAME, token, httponly=True, secure=secure, samesite=settings.SESSION_COOKIE_SAMESITE, max_age=settings.SESSION_COOKIE_MAX_AGE, path="/")
         response.set_cookie(settings.CSRF_COOKIE_NAME, csrf, httponly=False, secure=secure, samesite=settings.SESSION_COOKIE_SAMESITE, max_age=settings.SESSION_COOKIE_MAX_AGE, path="/")
         return {"authenticated": True, "token_type": "cookie"}
