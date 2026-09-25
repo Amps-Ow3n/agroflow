@@ -13,7 +13,7 @@ class Settings:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-    CORS_ORIGINS = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if x.strip()]
+    CORS_ORIGINS = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,https://agroflow-frontend-sigma.vercel.app").split(",") if x.strip()]
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     ENABLE_AUDIT_LOGS = _bool("ENABLE_AUDIT_LOGS", True)
     ENABLE_DECISION_LOGS = _bool("ENABLE_DECISION_LOGS", True)
@@ -21,7 +21,7 @@ class Settings:
     MAX_EVIDENCE_FILE_SIZE = int(os.getenv("MAX_EVIDENCE_FILE_SIZE", str(10 * 1024 * 1024)))
     SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "agroflow_access_token")
     CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "agroflow_csrf")
-    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "lax")
+    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "none")
     SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", str(30 * 60)))
     RATE_LIMIT_LOGIN_MAX = int(os.getenv("RATE_LIMIT_LOGIN_MAX", "10"))
     RATE_LIMIT_LOGIN_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_LOGIN_WINDOW_SECONDS", "300"))
