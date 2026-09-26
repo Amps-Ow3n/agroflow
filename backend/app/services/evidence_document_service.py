@@ -213,6 +213,7 @@ def save_uploaded_file(
     storage_root: Path,
     procurement_id: int
 ):
+    storage_root = Path(storage_root)
 
     extension = ""
 
