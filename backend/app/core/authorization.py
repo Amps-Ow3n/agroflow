@@ -741,8 +741,6 @@ def authorize_procurement(
         403 when user lacks permission in that organization.
     """
 
-    from fastapi import HTTPException, status
-
     organization_id = get_procurement_organization_id(
         cursor,
         procurement_id,
@@ -807,7 +805,6 @@ def authorize_commitment(
     permission: str,
 ) -> int:
 
-    from fastapi import HTTPException, status
 
     organization_id = get_commitment_organization_id(
         cursor,
@@ -840,7 +837,7 @@ def authorize_delivery(
     permission: str,
 ) -> int:
 
-    from fastapi import HTTPException, status
+    
 
     organization_id = get_delivery_organization_id(
         cursor,
