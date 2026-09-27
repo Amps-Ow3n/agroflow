@@ -34,6 +34,57 @@ router = APIRouter(
 
 
 # =========================================================
+# CURRENT SUPPLIER PERFORMANCE
+# =========================================================
+# IMPORTANT:
+# This fixed /me route MUST appear before
+# /{supplier_id}/performance.
+# =========================================================
+
+@router.get(
+    "/me/performance"
+)
+def get_my_performance(
+    user=Depends(
+        require_supplier_user
+    )
+):
+
+    conn, cursor = get_db()
+
+    try:
+
+        supplier = get_supplier_by_user(
+            cursor,
+            user["user"]["id"]
+        )
+
+        if not supplier:
+
+            raise HTTPException(
+                status_code=404,
+                detail=
+                    "Supplier profile not found."
+            )
+
+        performance = get_supplier_performance(
+            cursor,
+            supplier["id"]
+        )
+
+        return {
+            "supplier": dict(supplier),
+
+            "performance":
+                performance
+        }
+
+    finally:
+
+        conn.close()
+
+
+# =========================================================
 # SUPPLIER PERFORMANCE
 # SCHOOL / PROCUREMENT VIEW
 # =========================================================
@@ -64,12 +115,10 @@ def get_performance(
                 detail="Supplier not found."
             )
 
-
         performance = get_supplier_performance(
             cursor,
             supplier_id
         )
-
 
         return {
             "supplier": {
@@ -92,11 +141,9 @@ def get_performance(
                 performance
         }
 
-
     except HTTPException:
 
         raise
-
 
     except Exception as e:
 
@@ -128,7 +175,6 @@ def get_performance(
                 "Unable to load supplier performance."
         )
 
-
     finally:
 
         conn.close()
@@ -153,6 +199,7 @@ def refresh_performance(
     try:
 
         with write_transaction(conn):
+
             result = refresh_supplier_performance(
                 cursor,
                 supplier_id
@@ -166,12 +213,10 @@ def refresh_performance(
                 result
         }
 
-
     except HTTPException:
 
         conn.rollback()
         raise
-
 
     except Exception as e:
 
@@ -204,57 +249,6 @@ def refresh_performance(
             detail=
                 "Unable to refresh supplier performance."
         )
-
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# CURRENT SUPPLIER PERFORMANCE
-# =========================================================
-
-@router.get(
-    "/me/performance"
-)
-def get_my_performance(
-    user=Depends(
-        require_supplier_user
-    )
-):
-
-    conn, cursor = get_db()
-
-    try:
-
-        supplier = get_supplier_by_user(
-            cursor,
-            user["user"]["id"]
-        )
-
-        if not supplier:
-
-            raise HTTPException(
-                status_code=404,
-                detail=
-                    "Supplier profile not found."
-            )
-
-
-        performance = get_supplier_performance(
-            cursor,
-            supplier["id"]
-        )
-
-
-        return {
-            "supplier": dict(supplier),
-
-            "performance":
-                performance
-        }
-
 
     finally:
 
