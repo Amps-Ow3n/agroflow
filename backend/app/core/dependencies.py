@@ -22,6 +22,7 @@ from app.core.authorization import (
     PERMISSION_ORGANIZATION_VIEW,
     PERMISSION_ORGANIZATION_UPDATE,
     PERMISSION_ORGANIZATION_MANAGE_MEMBERS,
+    PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE,
 
     PERMISSION_PROCUREMENT_VIEW,
     PERMISSION_PROCUREMENT_CREATE,
@@ -767,7 +768,9 @@ require_admin = require_permission(
     ),
 )
 
-
+require_membership_responsibility_manage = require_permission(
+    PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE,
+)
 # =========================================================
 # PROCUREMENT
 # =========================================================

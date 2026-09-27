@@ -26,7 +26,7 @@ Important:
 - System administrators are platform-level and separate from
   organization responsibilities.
 """
-
+from fastapi import HTTPException, status
 from __future__ import annotations
 
 from typing import Iterable
@@ -53,7 +53,9 @@ PERMISSION_ORGANIZATION_UPDATE = "organization:update"
 PERMISSION_ORGANIZATION_MANAGE_MEMBERS = (
     "organization:manage_members"
 )
-
+PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE = (
+    "membership:responsibility:manage"
+)
 PERMISSION_PROCUREMENT_VIEW = "procurement:view"
 PERMISSION_PROCUREMENT_CREATE = "procurement:create"
 PERMISSION_PROCUREMENT_UPDATE = "procurement:update"
@@ -130,6 +132,7 @@ RESPONSIBILITY_PERMISSIONS: dict[str, frozenset[str]] = {
         PERMISSION_ORGANIZATION_VIEW,
         PERMISSION_ORGANIZATION_UPDATE,
         PERMISSION_ORGANIZATION_MANAGE_MEMBERS,
+        PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE,
 
         PERMISSION_PROCUREMENT_VIEW,
         PERMISSION_PROCUREMENT_CREATE,
@@ -771,7 +774,7 @@ def authorize_purchase_order(
     permission: str,
 ) -> int:
 
-    from fastapi import HTTPException, status
+    
 
     organization_id = get_purchase_order_organization_id(
         cursor,
