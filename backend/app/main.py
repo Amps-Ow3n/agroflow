@@ -13,7 +13,7 @@ from app.core.request_context import set_request_id
 from app.routes.auth import router as auth_router
 from app.routes.identity import router as identity_router
 from app.routes.organizations import router as organizations_router
-from app.routers.membership_router import router as membership_router
+from app.routes.membership_router import router as membership_router
 from app.routes.procurement_routes import router as procurement_router
 from app.routes.supplier_registry_routes import router as supplier_registry_router
 from app.routes.supplier_evaluation_routes import router as supplier_evaluation_router
