@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 AgroFlow centralized authorization.
 
@@ -27,7 +28,7 @@ Important:
   organization responsibilities.
 """
 from fastapi import HTTPException, status
-from __future__ import annotations
+
 
 from typing import Iterable
 
