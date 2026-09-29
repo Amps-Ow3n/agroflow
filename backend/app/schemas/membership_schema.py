@@ -1,9 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class AddMembershipResponsibilityRequest(BaseModel):
-    responsibility_code: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-    )
+class AddMembershipResponsibilityRequest(
+    BaseModel
+):
+    responsibility_code: str

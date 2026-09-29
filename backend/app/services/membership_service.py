@@ -2,6 +2,116 @@ from fastapi import HTTPException
 
 from app.core.db import get_db
 from app.core.transactions import write_transaction
+from app.models.procurement_events import (
+    record_audit_event,
+)
+
+
+def list_organization_members(
+    organization_id: int,
+):
+    conn, cursor = get_db()
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                om.id AS membership_id,
+                om.user_id,
+                u.name AS full_name,
+                u.email,
+                om.status AS membership_status,
+                o.organization_type
+
+            FROM organization_memberships om
+
+            JOIN users u
+                ON u.id = om.user_id
+
+            JOIN organizations o
+                ON o.id = om.organization_id
+
+            WHERE om.organization_id = %s
+
+            ORDER BY
+                u.name ASC
+            """,
+            (
+                organization_id,
+            ),
+        )
+
+        members = cursor.fetchall()
+
+        for member in members:
+            cursor.execute(
+                """
+                SELECT
+                    r.code,
+                    r.name
+
+                FROM membership_responsibilities mr
+
+                JOIN responsibilities r
+                    ON r.id = mr.responsibility_id
+
+                WHERE mr.membership_id = %s
+
+                ORDER BY
+                    r.code
+                """,
+                (
+                    member["membership_id"],
+                ),
+            )
+
+            member["responsibilities"] = (
+                cursor.fetchall()
+            )
+
+        return members
+
+    finally:
+        conn.close()
+
+
+def list_assignable_responsibilities(
+    organization_id: int,
+):
+    conn, cursor = get_db()
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                code,
+                name,
+                description,
+                organization_type
+
+            FROM responsibilities
+
+            WHERE
+                organization_type IS NULL
+                OR organization_type = 'ANY'
+                OR organization_type = (
+                    SELECT organization_type
+                    FROM organizations
+                    WHERE id = %s
+                )
+
+            ORDER BY
+                name ASC
+            """,
+            (
+                organization_id,
+            ),
+        )
+
+        return cursor.fetchall()
+
+    finally:
+        conn.close()
 
 
 def add_membership_responsibility(
@@ -10,7 +120,9 @@ def add_membership_responsibility(
     responsibility_code: str,
     actor_user_id: int,
 ):
-    responsibility_code = responsibility_code.strip().upper()
+    responsibility_code = (
+        responsibility_code.strip().upper()
+    )
 
     if not responsibility_code:
         raise HTTPException(
@@ -23,10 +135,9 @@ def add_membership_responsibility(
     try:
         with write_transaction(conn):
 
-            # ---------------------------------------------------------
-            # 1. Verify the actor has an active membership in this
-            #    organization and is an ORGANIZATION_ADMIN.
-            # ---------------------------------------------------------
+            # --------------------------------------------------
+            # 1. Verify target organization membership
+            # --------------------------------------------------
 
             cursor.execute(
                 """
@@ -34,65 +145,26 @@ def add_membership_responsibility(
                     om.id,
                     om.user_id,
                     om.organization_id,
-                    om.status
+                    om.status,
+
+                    o.organization_type,
+                    o.status AS organization_status,
+                    o.verification_status
+
                 FROM organization_memberships om
-
-                JOIN membership_responsibilities mr
-                    ON mr.membership_id = om.id
-
-                JOIN responsibilities r
-                    ON r.id = mr.responsibility_id
 
                 JOIN organizations o
                     ON o.id = om.organization_id
 
-                WHERE om.user_id = %s
-                  AND om.organization_id = %s
-                  AND om.status = 'ACTIVE'
-                  AND o.status = 'ACTIVE'
-                  AND o.verification_status = 'VERIFIED'
-                  AND r.code = 'ORGANIZATION_ADMIN'
+                WHERE
+                    om.organization_id = %s
+                    AND om.user_id = %s
 
                 FOR UPDATE
                 """,
                 (
-                    actor_user_id,
                     organization_id,
-                ),
-            )
-
-            actor_membership = cursor.fetchone()
-
-            if not actor_membership:
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        "You must be an active organization administrator "
-                        "of this organization."
-                    ),
-                )
-
-            # ---------------------------------------------------------
-            # 2. Find the target user's existing membership.
-            # ---------------------------------------------------------
-
-            cursor.execute(
-                """
-                SELECT
-                    om.id,
-                    om.user_id,
-                    om.organization_id,
-                    om.status
-                FROM organization_memberships om
-
-                WHERE om.user_id = %s
-                  AND om.organization_id = %s
-
-                FOR UPDATE
-                """,
-                (
                     target_user_id,
-                    organization_id,
                 ),
             )
 
@@ -102,8 +174,8 @@ def add_membership_responsibility(
                 raise HTTPException(
                     status_code=404,
                     detail=(
-                        "The target user does not have a membership "
-                        "in this organization."
+                        "The target user does not have "
+                        "a membership in this organization."
                     ),
                 )
 
@@ -111,14 +183,37 @@ def add_membership_responsibility(
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "The target user's organization membership "
-                        "is not active."
+                        "The target user's organization "
+                        "membership is not active."
                     ),
                 )
 
-            # ---------------------------------------------------------
-            # 3. Find the requested responsibility.
-            # ---------------------------------------------------------
+            if (
+                membership["organization_status"]
+                != "ACTIVE"
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "This organization is not active."
+                    ),
+                )
+
+            if (
+                membership["verification_status"]
+                != "VERIFIED"
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "This organization has not "
+                        "been verified."
+                    ),
+                )
+
+            # --------------------------------------------------
+            # 2. Find requested responsibility
+            # --------------------------------------------------
 
             cursor.execute(
                 """
@@ -126,11 +221,16 @@ def add_membership_responsibility(
                     id,
                     code,
                     name,
+                    description,
                     organization_type
+
                 FROM responsibilities
+
                 WHERE code = %s
                 """,
-                (responsibility_code,),
+                (
+                    responsibility_code,
+                ),
             )
 
             responsibility = cursor.fetchone()
@@ -141,58 +241,42 @@ def add_membership_responsibility(
                     detail="Responsibility not found.",
                 )
 
-            # ---------------------------------------------------------
-            # 4. Verify responsibility is compatible with the
-            #    organization's type.
-            # ---------------------------------------------------------
+            # --------------------------------------------------
+            # 3. Verify responsibility fits organization
+            # --------------------------------------------------
 
-            cursor.execute(
-                """
-                SELECT
-                    organization_type
-                FROM organizations
-                WHERE id = %s
-                """,
-                (organization_id,),
+            allowed_type = (
+                responsibility["organization_type"]
             )
 
-            organization = cursor.fetchone()
-
-            if not organization:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Organization not found.",
-                )
-
-            responsibility_org_type = responsibility[
-                "organization_type"
-            ]
-
             if (
-                responsibility_org_type is not None
-                and responsibility_org_type != "ANY"
-                and responsibility_org_type
-                != organization["organization_type"]
+                allowed_type is not None
+                and allowed_type != "ANY"
+                and allowed_type
+                != membership["organization_type"]
             ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "This responsibility is not valid for "
-                        "this organization type."
+                        "This responsibility is not valid "
+                        "for this organization type."
                     ),
                 )
 
-            # ---------------------------------------------------------
-            # 5. Check whether the membership already has the role.
-            # ---------------------------------------------------------
+            # --------------------------------------------------
+            # 4. Prevent duplicate responsibility
+            # --------------------------------------------------
 
             cursor.execute(
                 """
                 SELECT
                     1
+
                 FROM membership_responsibilities
-                WHERE membership_id = %s
-                  AND responsibility_id = %s
+
+                WHERE
+                    membership_id = %s
+                    AND responsibility_id = %s
                 """,
                 (
                     membership["id"],
@@ -204,16 +288,21 @@ def add_membership_responsibility(
 
             if existing:
                 return {
-                    "membership_id": membership["id"],
-                    "user_id": target_user_id,
-                    "organization_id": organization_id,
-                    "responsibility_code": responsibility["code"],
-                    "status": "ALREADY_ASSIGNED",
+                    "membership_id":
+                        membership["id"],
+                    "user_id":
+                        target_user_id,
+                    "organization_id":
+                        organization_id,
+                    "responsibility_code":
+                        responsibility["code"],
+                    "status":
+                        "ALREADY_ASSIGNED",
                 }
 
-            # ---------------------------------------------------------
-            # 6. Add the responsibility to the EXISTING membership.
-            # ---------------------------------------------------------
+            # --------------------------------------------------
+            # 5. Add responsibility to EXISTING membership
+            # --------------------------------------------------
 
             cursor.execute(
                 """
@@ -221,7 +310,11 @@ def add_membership_responsibility(
                     membership_id,
                     responsibility_id
                 )
-                VALUES (%s, %s)
+
+                VALUES (
+                    %s,
+                    %s
+                )
                 """,
                 (
                     membership["id"],
@@ -229,12 +322,38 @@ def add_membership_responsibility(
                 ),
             )
 
+            # --------------------------------------------------
+            # 6. Audit
+            # --------------------------------------------------
+
+            record_audit_event(
+                cursor,
+                None,
+                actor_user_id,
+                "ASSIGN_MEMBERSHIP_RESPONSIBILITY",
+                "organization_membership",
+                membership["id"],
+                None,
+                {
+                    "user_id":
+                        target_user_id,
+
+                    "organization_id":
+                        organization_id,
+
+                    "responsibility":
+                        responsibility["code"],
+                },
+            )
+
             return {
-                "membership_id": membership["id"],
-                "user_id": target_user_id,
-                "organization_id": organization_id,
-                "responsibility_code": responsibility["code"],
                 "status": "ASSIGNED",
+                "membership_id":
+                    membership["id"],
+                "user_id":
+                    target_user_id,
+                "responsibility":
+                    responsibility["code"],
             }
 
     finally:

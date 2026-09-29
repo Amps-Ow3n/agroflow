@@ -151,10 +151,20 @@ def require_system_admin(
 
     return user
 
-def require_organization_manage_members(
+def require_membership_responsibility_manage(
     organization_id: int,
-    user=Depends(require_user)
+    user=Depends(require_user),
 ):
+    """
+    Require permission to manage responsibilities
+    within one specific organization.
+
+    The organization_id from the URL is mandatory.
+
+    Authorization is evaluated against that exact
+    organization membership.
+    """
+
     membership = get_authorized_membership(
         user,
         PERMISSION_ORGANIZATION_MANAGE_MEMBERS,
@@ -162,34 +172,57 @@ def require_organization_manage_members(
     )
 
     if not membership:
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "You do not have permission to manage "
-                "members in this organization."
-            )
+                "You do not have permission to "
+                "manage members in this organization."
+            ),
+        )
+
+    if membership.get(
+        "status"
+    ) != "ACTIVE":
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Your membership in this "
+                "organization is not active."
+            ),
         )
 
     organization = membership.get(
         "organization",
-        {}
+        {},
     )
 
-    if organization.get("status") != "ACTIVE":
+    if organization.get(
+        "status"
+    ) != "ACTIVE":
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organization is not active."
+            detail=(
+                "This organization is not active."
+            ),
         )
 
     if organization.get(
         "verification_status"
     ) != "VERIFIED":
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organization is not verified."
+            detail=(
+                "This organization has not "
+                "been verified."
+            ),
         )
 
     return user
+
 
 # =========================================================
 # MEMBERSHIP LOOKUP
@@ -807,9 +840,6 @@ require_admin = require_permission(
     ),
 )
 
-require_membership_responsibility_manage = require_permission(
-    PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE,
-)
 # =========================================================
 # PROCUREMENT
 # =========================================================
