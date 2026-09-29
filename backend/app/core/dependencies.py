@@ -151,6 +151,45 @@ def require_system_admin(
 
     return user
 
+def require_organization_manage_members(
+    organization_id: int,
+    user=Depends(require_user)
+):
+    membership = get_authorized_membership(
+        user,
+        PERMISSION_ORGANIZATION_MANAGE_MEMBERS,
+        organization_id=organization_id,
+    )
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "You do not have permission to manage "
+                "members in this organization."
+            )
+        )
+
+    organization = membership.get(
+        "organization",
+        {}
+    )
+
+    if organization.get("status") != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization is not active."
+        )
+
+    if organization.get(
+        "verification_status"
+    ) != "VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization is not verified."
+        )
+
+    return user
 
 # =========================================================
 # MEMBERSHIP LOOKUP

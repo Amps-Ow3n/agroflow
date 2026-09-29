@@ -14,6 +14,9 @@ from app.routes.auth import router as auth_router
 from app.routes.identity import router as identity_router
 from app.routes.organizations import router as organizations_router
 from app.routes.membership_router import router as membership_router
+from app.routes.organization_members import (
+    router as organization_members_router
+)
 from app.routes.procurement_routes import router as procurement_router
 from app.routes.supplier_registry_routes import router as supplier_registry_router
 from app.routes.supplier_evaluation_routes import router as supplier_evaluation_router
@@ -71,7 +74,7 @@ async def agroflow_exception_handler(request:Request,exc:AgroFlowException):
 app.add_middleware(CORSMiddleware,allow_origins=settings.CORS_ORIGINS,allow_credentials=True,allow_methods=["*"],allow_headers=["*", "X-CSRF-Token"])
 
 for router in (
-    auth_router,identity_router,organizations_router,membership_router,procurement_router,
+    auth_router,identity_router,organizations_router,membership_router,organization_members_router,procurement_router,
     supplier_registry_router,supplier_evaluation_router,supplier_selection_router,
     purchase_order_router,commitment_router,delivery_router,procurement_event_router,
     supplier_performance_router, evidence_router, privacy_router,
