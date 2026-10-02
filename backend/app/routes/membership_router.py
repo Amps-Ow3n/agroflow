@@ -5,11 +5,14 @@ from app.core.dependencies import (
 )
 from app.schemas.membership_schema import (
     AddMembershipResponsibilityRequest,
+    AddOrganizationMemberRequest,
 )
 from app.services.membership_service import (
     add_membership_responsibility,
+    add_organization_member,
+    list_organization_members,
+    list_assignable_responsibilities,
 )
-
 
 router = APIRouter(
     prefix="/organizations",
@@ -32,5 +35,24 @@ def add_responsibility(
         organization_id=organization_id,
         target_user_id=user_id,
         responsibility_code=payload.responsibility_code,
+        actor_user_id=user["user"]["id"],
+    )
+
+@router.post(
+    "/{organization_id}/memberships",
+)
+def add_member(
+    organization_id: int,
+    payload: AddOrganizationMemberRequest,
+    user=Depends(
+        require_membership_responsibility_manage
+    ),
+):
+    return add_organization_member(
+        organization_id=organization_id,
+        email=str(payload.email),
+        responsibility_code=(
+            payload.responsibility_code
+        ),
         actor_user_id=user["user"]["id"],
     )
