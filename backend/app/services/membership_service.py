@@ -383,17 +383,10 @@ def add_organization_member(
                 membership["id"],
                 None,
                 {
-                    "user_id":
-                        target_user_id,
-
-                    "organization_id":
-                        organization_id,
-
-                    "email":
-                        target_user["email"],
-
-                    "responsibility":
-                        responsibility["code"],
+                    "user_id": target_user_id,
+                    "organization_id": organization_id,
+                    "email": target_user["email"],
+                    "responsibility": responsibility["code"],
                 },
             )
 
