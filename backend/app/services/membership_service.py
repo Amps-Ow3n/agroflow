@@ -371,24 +371,8 @@ def add_organization_member(
             )
 
             # --------------------------------------------------
-            # 8. Audit
+            # 8. Return result
             # --------------------------------------------------
-
-            record_audit_event(
-                cursor,
-                None,
-                actor_user_id,
-                "ADD_ORGANIZATION_MEMBER",
-                "organization_membership",
-                membership["id"],
-                None,
-                {
-                    "user_id": target_user_id,
-                    "organization_id": organization_id,
-                    "email": target_user["email"],
-                    "responsibility": responsibility["code"],
-                },
-            )
 
             return {
                 "status": "ADDED",
@@ -618,28 +602,8 @@ def add_membership_responsibility(
             )
 
             # --------------------------------------------------
-            # 6. Audit
+            # 6. Return result
             # --------------------------------------------------
-
-            record_audit_event(
-                cursor,
-                None,
-                actor_user_id,
-                "ASSIGN_MEMBERSHIP_RESPONSIBILITY",
-                "organization_membership",
-                membership["id"],
-                None,
-                {
-                    "user_id":
-                        target_user_id,
-
-                    "organization_id":
-                        organization_id,
-
-                    "responsibility":
-                        responsibility["code"],
-                },
-            )
 
             return {
                 "status": "ASSIGNED",
