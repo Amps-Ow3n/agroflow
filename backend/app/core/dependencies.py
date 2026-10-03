@@ -1000,12 +1000,11 @@ require_delivery_create = require_permission(
     organization_type="SCHOOL",
 )
 
-require_delivery_inspect = require_permission(
+require_receiving_officer = require_permission(
     PERMISSION_DELIVERY_INSPECT,
     resource_type="delivery",
     organization_type="SCHOOL",
 )
-
 
 # =========================================================
 # INSPECTION

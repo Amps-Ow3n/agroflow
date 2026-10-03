@@ -4,7 +4,7 @@ from app.core.dependencies import (
     require_delivery_create,
     require_delivery_view,
     require_procurement_delivery_view,
-    require_delivery_inspect,
+    require_receiving_officer,
     require_corrective_action_create,
 )
 from app.core.transactions import write_transaction
@@ -28,7 +28,7 @@ def procurement_deliveries(
         )
     finally:
         conn.close()
-        
+
 @router.get("/procurement/{procurement_id}/inspection-history")
 def inspection_history(procurement_id:int,user=Depends(require_delivery_view)):
     conn,cursor=get_db()
@@ -49,7 +49,11 @@ def delivery_detail(delivery_id:int,user=Depends(require_delivery_view)):
     finally: conn.close()
 
 @router.post("/{delivery_id}/inspect")
-def inspect(delivery_id:int,payload:InspectionCreate,user=Depends(require_delivery_inspect)):
+def inspect(
+    delivery_id: int,
+    payload: InspectionCreate,
+    user=Depends(require_receiving_officer),
+):
     conn,cursor=get_db()
     try:
         with write_transaction(conn): return inspect_delivery(cursor,delivery_id,user["user"]["id"],payload)
