@@ -1,6 +1,12 @@
 from fastapi import APIRouter,Depends
 from app.core.db import get_db
-from app.core.dependencies import require_delivery_create,require_delivery_view,require_delivery_inspect,require_corrective_action_create
+from app.core.dependencies import (
+    require_delivery_create,
+    require_delivery_view,
+    require_procurement_delivery_view,
+    require_delivery_inspect,
+    require_corrective_action_create,
+)
 from app.core.transactions import write_transaction
 from app.schemas.delivery_schema import DeliveryCreate,InspectionCreate,CorrectiveActionCreate
 from app.services.delivery_service import create_delivery,get_delivery,get_procurement_deliveries
@@ -9,11 +15,20 @@ from app.services.inspection_service import inspect_delivery,create_corrective_a
 router=APIRouter(prefix="/deliveries",tags=["Deliveries"])
 
 @router.get("/procurement/{procurement_id}")
-def procurement_deliveries(procurement_id:int,user=Depends(require_delivery_view)):
-    conn,cursor=get_db()
-    try: return get_procurement_deliveries(cursor,procurement_id,user["user"]["id"])
-    finally: conn.close()
-
+def procurement_deliveries(
+    procurement_id: int,
+    user=Depends(require_procurement_delivery_view),
+):
+    conn, cursor = get_db()
+    try:
+        return get_procurement_deliveries(
+            cursor,
+            procurement_id,
+            user["user"]["id"],
+        )
+    finally:
+        conn.close()
+        
 @router.get("/procurement/{procurement_id}/inspection-history")
 def inspection_history(procurement_id:int,user=Depends(require_delivery_view)):
     conn,cursor=get_db()

@@ -989,6 +989,12 @@ require_delivery_view = require_permission(
     resource_type="delivery",
 )
 
+require_procurement_delivery_view = require_permission(
+    PERMISSION_DELIVERY_VIEW,
+    resource_type="procurement",
+    organization_type="SCHOOL",
+)
+
 require_delivery_create = require_permission(
     PERMISSION_DELIVERY_CREATE,
     organization_type="SCHOOL",
