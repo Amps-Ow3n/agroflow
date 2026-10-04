@@ -1,0 +1,46 @@
+{
+  "dataset_name": "Feature22 deterministic evidence dataset",
+  "version": "1.0",
+  "purpose": "Human-readable deterministic fixture specification for acceptance, workflow, security, discrepancy, and evidence reasoning.",
+  "canonical_discrepancy": {
+    "committed_kg": 500,
+    "received_kg": 430,
+    "shortfall_kg": 70,
+    "variance_percent": 14
+  },
+  "procurement_cases": [
+    {"id": "P-001", "case": "successful", "required_kg": 500, "promised_kg": 500, "received_kg": 500, "inspection": "ACCEPTED"},
+    {"id": "P-002", "case": "partial_delivery", "required_kg": 500, "promised_kg": 500, "received_kg": 430, "inspection": "ACCEPTED_WITH_DISCREPANCY"},
+    {"id": "P-003", "case": "rejected_then_corrected", "required_kg": 500, "promised_kg": 500, "received_kg": 500, "inspection": "ACCEPTED_AFTER_CORRECTIVE_ACTION"},
+    {"id": "P-004", "case": "late_delivery", "required_kg": 300, "promised_kg": 300, "received_kg": 300, "inspection": "ACCEPTED_LATE"}
+  ],
+  "supplier_history": [
+    {"supplier": "S-NEW", "observation_count": 0, "expected_interpretation": "NEW_OR_INSUFFICIENT_EVIDENCE"},
+    {"supplier": "S-ESTABLISHED", "observation_count": 5, "expected_interpretation": "HISTORICAL_INDICATORS_AVAILABLE"}
+  ],
+  "capacity_cases": [
+    {"available_kg": 500, "requested_kg": 500, "expected": "ACCEPT"},
+    {"available_kg": 500, "requested_kg": 501, "expected": "REJECT"},
+    {"available_kg": 0, "requested_kg": 0, "expected": "ACCEPT_IF_DOMAIN_RULE_ALLOWS_ZERO_BOUNDARY"},
+    {"available_kg": 0, "requested_kg": 1, "expected": "REJECT"},
+    {"available_kg": 500, "requested_kg": -1, "expected": "REJECT"}
+  ],
+  "security_cases": [
+    {"case": "wrong_role", "expected": "DENY"},
+    {"case": "wrong_organization", "expected": "DENY"},
+    {"case": "inactive_membership", "expected": "DENY"},
+    {"case": "unverified_organization", "expected": "DENY"},
+    {"case": "supplier_inspects_own_delivery", "expected": "DENY"}
+  ],
+  "evidence_types": [
+    "RFQ",
+    "SUPPLIER_RESPONSE",
+    "EVALUATION",
+    "PURCHASE_ORDER",
+    "COMMITMENT",
+    "DELIVERY_NOTE_OR_GRN",
+    "INSPECTION",
+    "INVOICE_OR_PAYMENT",
+    "APPROVAL"
+  ]
+}

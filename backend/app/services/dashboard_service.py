@@ -236,6 +236,27 @@ def get_school_dashboard(cursor, organization_id):
 
     cursor.execute(
         """
+        SELECT COUNT(*) AS ready_to_complete_count
+        FROM procurements p
+        WHERE p.organization_id = %s
+          AND p.status = 'ACCEPTED'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM purchase_orders po
+              JOIN supplier_commitments sc ON sc.purchase_order_id = po.id
+              JOIN deliveries d ON d.commitment_id = sc.id
+              JOIN inspections i ON i.delivery_id = d.id
+              JOIN corrective_actions ca ON ca.inspection_id = i.id
+              WHERE po.procurement_id = p.id
+                AND ca.status = 'OPEN'
+          )
+        """,
+        (organization_id,),
+    )
+    ready_to_complete_count = (cursor.fetchone() or {}).get("ready_to_complete_count", 0)
+
+    cursor.execute(
+        """
         SELECT
             p.id AS procurement_id,
             p.procurement_identifier,
@@ -274,6 +295,7 @@ def get_school_dashboard(cursor, organization_id):
             "awaiting_inspection": awaiting_inspection_count,
             "discrepancies": discrepancy_count,
             "completed": counts.get("completed_count", 0),
+            "ready_to_complete": ready_to_complete_count,
             "cancelled": counts.get("cancelled_count", 0),
             "total": counts.get("total_count", 0),
         },
@@ -283,3 +305,170 @@ def get_school_dashboard(cursor, organization_id):
         "members": [dict(row) for row in members],
         "attention_required": [dict(row) for row in attention_items],
     }
+
+
+def get_supplier_dashboard(cursor, organization_id):
+    cursor.execute(
+        """
+        SELECT id, name, organization_type, status, verification_status
+        FROM organizations
+        WHERE id = %s
+        """,
+        (organization_id,),
+    )
+    organization = cursor.fetchone()
+    if not organization:
+        raise HTTPException(404, "Organization not found.")
+    if organization["organization_type"] != "SUPPLIER":
+        raise HTTPException(409, "This dashboard is only available for supplier organizations.")
+    if organization["status"] != "ACTIVE" or organization["verification_status"] != "VERIFIED":
+        raise HTTPException(403, "The organization must be active and verified.")
+
+    cursor.execute(
+        """
+        SELECT s.id AS supplier_id, s.supplier_code
+        FROM suppliers s
+        WHERE s.organization_id = %s
+        """,
+        (organization_id,),
+    )
+    supplier = cursor.fetchone()
+    if not supplier:
+        raise HTTPException(404, "Supplier profile not found.")
+
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE sc.status IN ('SUBMITTED','ACCEPTED')) AS active_commitments,
+            COUNT(*) FILTER (WHERE sc.status = 'SUBMITTED') AS pending_commitments,
+            COUNT(*) FILTER (WHERE sc.status = 'ACCEPTED') AS accepted_commitments,
+            COUNT(*) FILTER (WHERE sc.status = 'REJECTED') AS rejected_commitments,
+            COUNT(DISTINCT p.id) FILTER (WHERE p.status = 'COMPLETED') AS completed_cycles
+        FROM supplier_commitments sc
+        JOIN suppliers s ON s.id = sc.supplier_id
+        JOIN purchase_orders po ON po.id = sc.purchase_order_id
+        JOIN procurements p ON p.id = po.procurement_id
+        WHERE s.organization_id = %s
+        """,
+        (organization_id,),
+    )
+    counts = cursor.fetchone() or {}
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS awaiting_inspection
+        FROM deliveries d
+        JOIN supplier_commitments sc ON sc.id = d.commitment_id
+        JOIN suppliers s ON s.id = sc.supplier_id
+        WHERE s.organization_id = %s
+          AND d.delivery_status = 'AWAITING_INSPECTION'
+        """,
+        (organization_id,),
+    )
+    awaiting_inspection = (cursor.fetchone() or {}).get("awaiting_inspection", 0)
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS discrepancy_count
+        FROM deliveries d
+        JOIN supplier_commitments sc ON sc.id = d.commitment_id
+        JOIN suppliers s ON s.id = sc.supplier_id
+        JOIN inspections i ON i.delivery_id = d.id
+        WHERE s.organization_id = %s
+          AND (
+              i.result = 'REJECTED'
+              OR i.delay_status = 'DELAYED'
+              OR COALESCE(i.received_qty, 0) <> sc.promised_qty
+          )
+        """,
+        (organization_id,),
+    )
+    discrepancies = (cursor.fetchone() or {}).get("discrepancy_count", 0)
+
+    cursor.execute(
+        """
+        SELECT
+            sc.id, sc.status, sc.promised_qty, sc.delivery_start, sc.delivery_end,
+            po.order_number, p.id AS procurement_id, p.procurement_identifier, p.title,
+            p.status AS procurement_status
+        FROM supplier_commitments sc
+        JOIN suppliers s ON s.id = sc.supplier_id
+        JOIN purchase_orders po ON po.id = sc.purchase_order_id
+        JOIN procurements p ON p.id = po.procurement_id
+        WHERE s.organization_id = %s
+        ORDER BY sc.updated_at DESC, sc.id DESC
+        LIMIT 8
+        """,
+        (organization_id,),
+    )
+    recent = cursor.fetchall()
+
+    cursor.execute(
+        """
+        SELECT
+            u.id AS user_id, u.name AS user_name,
+            COUNT(pe.id) AS event_count, MAX(pe.occurred_at) AS last_activity_at
+        FROM procurement_events pe
+        JOIN users u ON u.id = pe.actor_id
+        JOIN organization_memberships om ON om.user_id = u.id
+        WHERE om.organization_id = %s AND om.status = 'ACTIVE'
+        GROUP BY u.id, u.name
+        ORDER BY MAX(pe.occurred_at) DESC, u.id
+        LIMIT 8
+        """,
+        (organization_id,),
+    )
+    team_activity = cursor.fetchall()
+
+    cursor.execute(
+        """
+        SELECT
+            u.id AS user_id, u.name, u.email, m.id AS membership_id,
+            m.status AS membership_status,
+            COALESCE(ARRAY_AGG(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::text[]) AS responsibilities
+        FROM organization_memberships m
+        JOIN users u ON u.id = m.user_id
+        LEFT JOIN membership_responsibilities mr ON mr.membership_id = m.id
+        LEFT JOIN responsibilities r ON r.id = mr.responsibility_id
+        WHERE m.organization_id = %s
+        GROUP BY u.id, u.name, u.email, m.id, m.status
+        ORDER BY u.name, u.id
+        """,
+        (organization_id,),
+    )
+    members = cursor.fetchall()
+
+    return {
+        "organization": dict(organization),
+        "overview": {
+            "active": counts.get("active_commitments", 0),
+            "awaiting_selection": counts.get("pending_commitments", 0),
+            "awaiting_delivery": counts.get("accepted_commitments", 0),
+            "awaiting_inspection": awaiting_inspection,
+            "discrepancies": discrepancies,
+            "completed": counts.get("completed_cycles", 0),
+            "cancelled": counts.get("rejected_commitments", 0),
+            "total": sum([counts.get("active_commitments", 0), counts.get("rejected_commitments", 0)]),
+            "ready_to_complete": 0,
+        },
+        "recent_procurements": [dict(r) for r in recent],
+        "pending_inspections": [],
+        "team_activity": [dict(r) for r in team_activity],
+        "members": [dict(r) for r in members],
+        "attention_required": [],
+    }
+
+
+def get_organization_dashboard(cursor, organization_id):
+    cursor.execute(
+        "SELECT organization_type FROM organizations WHERE id = %s",
+        (organization_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(404, "Organization not found.")
+    if row["organization_type"] == "SCHOOL":
+        return get_school_dashboard(cursor, organization_id)
+    if row["organization_type"] == "SUPPLIER":
+        return get_supplier_dashboard(cursor, organization_id)
+    raise HTTPException(409, "Unsupported organization type for dashboard.")

@@ -1,4 +1,5 @@
 from app.core.db import get_db
+from app.core.authorization import RESPONSIBILITY_PERMISSIONS
 
 
 def get_user_identity(user_id: int):
@@ -77,6 +78,15 @@ def get_user_identity(user_id: int):
 
             responsibilities = cursor.fetchall()
 
+            permission_set = set()
+            for responsibility in responsibilities:
+                permission_set.update(
+                    RESPONSIBILITY_PERMISSIONS.get(
+                        responsibility["code"],
+                        frozenset(),
+                    )
+                )
+
             memberships.append(
                 {
                     "id": row["membership_id"],
@@ -98,6 +108,9 @@ def get_user_identity(user_id: int):
                     },
 
                     "responsibilities": responsibilities,
+                    # UI capability hints only. Backend authorization
+                    # remains authoritative on every API request.
+                    "permissions": sorted(permission_set),
                 }
             )
 

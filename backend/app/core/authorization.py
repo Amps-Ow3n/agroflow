@@ -270,9 +270,19 @@ RESPONSIBILITY_PERMISSIONS: dict[str, frozenset[str]] = {
     # --------------------------------------------------------
 
     SUPPLIER_ADMIN: frozenset({
+        # Supplier admins govern their supplier organization as an
+        # organization administrator while retaining supplier operations.
         PERMISSION_ORGANIZATION_VIEW,
         PERMISSION_ORGANIZATION_UPDATE,
         PERMISSION_ORGANIZATION_MANAGE_MEMBERS,
+        PERMISSION_MEMBERSHIP_RESPONSIBILITY_MANAGE,
+        PERMISSION_PROCUREMENT_VIEW,
+        PERMISSION_PURCHASE_ORDER_VIEW,
+        PERMISSION_COMMITMENT_VIEW,
+        PERMISSION_DELIVERY_VIEW,
+        PERMISSION_EVIDENCE_VIEW,
+        PERMISSION_DASHBOARD_VIEW,
+        PERMISSION_REALITY_REPORT_VIEW,
 
         PERMISSION_PROCUREMENT_VIEW,
 
