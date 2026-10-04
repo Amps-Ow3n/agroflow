@@ -28,6 +28,8 @@ from app.routes.procurement_event_routes import router as procurement_event_rout
 from app.routes.supplier_performance import router as supplier_performance_router
 from app.routes.evidence_routes import router as evidence_router
 from app.routes.privacy_routes import router as privacy_router
+from app.routes.dashboard_routes import router as dashboard_router
+from app.routes.reality_report_routes import router as reality_report_router
 
 settings.validate()
 app=FastAPI(title="AgroFlow MVP",version="2.1.0")
@@ -77,7 +79,7 @@ for router in (
     auth_router,identity_router,organizations_router,membership_router,organization_members_router,procurement_router,
     supplier_registry_router,supplier_evaluation_router,supplier_selection_router,
     purchase_order_router,commitment_router,delivery_router,procurement_event_router,
-    supplier_performance_router, evidence_router, privacy_router,
+    supplier_performance_router, evidence_router, privacy_router, dashboard_router, reality_report_router,
 ):
     app.include_router(router)
 

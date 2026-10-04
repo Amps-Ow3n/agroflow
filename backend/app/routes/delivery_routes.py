@@ -30,7 +30,7 @@ def procurement_deliveries(
         conn.close()
 
 @router.get("/procurement/{procurement_id}/inspection-history")
-def inspection_history(procurement_id:int,user=Depends(require_delivery_view)):
+def inspection_history(procurement_id:int,user=Depends(require_procurement_delivery_view)):
     conn,cursor=get_db()
     try: return get_procurement_inspection_history(cursor,procurement_id,user["user"]["id"])
     finally: conn.close()

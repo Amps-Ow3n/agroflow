@@ -458,6 +458,10 @@ class FakeCursor:
             self.result = []
             return
 
+        if "SELECT COUNT(*) AS OPEN_ACTIONS FROM CORRECTIVE_ACTIONS" in q:
+            self.result = [{"open_actions": sum(1 for row in self.corrective_actions.values() if row.get("status") == "OPEN")}]
+            return
+
         # -------------------- generic SELECT/transition helpers --------------------
         if "FROM PROCUREMENTS P" in q and "JOIN USERS U" in q and "FOR UPDATE" in q:
             pid, uid = params[:2]

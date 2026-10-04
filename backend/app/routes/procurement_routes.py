@@ -14,7 +14,7 @@ from app.core.transactions import write_transaction
 from app.schemas.procurement_schema import ProcurementCreate, ProcurementUpdate, ProcurementCancel, ProcurementTransition
 from app.services.procurement_service import (
     create_procurement, update_procurement, submit_procurement,
-    cancel_procurement, transition_procurement,
+    cancel_procurement, complete_procurement, transition_procurement,
     get_available_procurement_transitions, get_procurement_for_user,
     get_procurement_items, get_procurement_event_history,
 )
@@ -126,6 +126,20 @@ def cancel(procurement_id:int,payload:ProcurementCancel,user=Depends(require_pro
         with write_transaction(conn):
             return cancel_procurement(cursor,procurement_id,user["user"]["id"],payload.reason)
     finally: conn.close()
+
+
+@router.post("/{procurement_id}/complete")
+def complete(procurement_id: int, user=Depends(require_procurement_transition)):
+    conn, cursor = get_db()
+    try:
+        with write_transaction(conn):
+            return complete_procurement(
+                cursor,
+                procurement_id,
+                user["user"]["id"],
+            )
+    finally:
+        conn.close()
 
 
 @router.post("/{procurement_id}/transition")

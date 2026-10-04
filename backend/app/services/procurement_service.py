@@ -213,6 +213,48 @@ def cancel_procurement(cursor, procurement_id, user_id, reason):
     return transition_procurement(cursor, procurement_id, user_id, "CANCELLED", reason)
 
 
+def complete_procurement(cursor, procurement_id, user_id):
+    procurement = get_procurement_for_user(
+        cursor, procurement_id, user_id, for_update=True
+    )
+    if not procurement:
+        raise HTTPException(404, "Procurement not found.")
+
+    if procurement["status"] != "ACCEPTED":
+        raise HTTPException(
+            409,
+            "A procurement can only be completed after all required quantities have been accepted.",
+        )
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS open_actions
+        FROM corrective_actions ca
+        JOIN inspections i ON i.id = ca.inspection_id
+        JOIN deliveries d ON d.id = i.delivery_id
+        JOIN supplier_commitments sc ON sc.id = d.commitment_id
+        JOIN purchase_orders po ON po.id = sc.purchase_order_id
+        WHERE po.procurement_id = %s
+          AND ca.status = 'OPEN'
+        """,
+        (procurement_id,),
+    )
+    open_actions = (cursor.fetchone() or {}).get("open_actions", 0)
+    if open_actions:
+        raise HTTPException(
+            409,
+            "The procurement cannot be completed while corrective actions remain open.",
+        )
+
+    return transition_procurement(
+        cursor,
+        procurement_id,
+        user_id,
+        "COMPLETED",
+        "Procurement cycle closed after accepted inspection results.",
+    )
+
+
 def enter_supplier_evaluation(cursor, procurement_id, user_id):
     return transition_procurement(cursor, procurement_id, user_id, "EVALUATION", "Supplier evaluation started.")
 

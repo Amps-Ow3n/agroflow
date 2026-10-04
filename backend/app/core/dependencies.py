@@ -828,6 +828,17 @@ def require_organization_permission(
     return membership
 
 
+def require_organization_dashboard_view(
+    organization_id: int,
+    user=Depends(require_user),
+):
+    return require_organization_permission(
+        PERMISSION_DASHBOARD_VIEW,
+        organization_id,
+        user,
+    )
+
+
 # =========================================================
 # ORGANIZATION ADMIN
 # =========================================================
@@ -1096,6 +1107,12 @@ require_dashboard_view = require_permission(
 
 require_reality_report_view = require_permission(
     PERMISSION_REALITY_REPORT_VIEW,
+)
+
+require_reality_report_for_procurement = require_permission(
+    PERMISSION_REALITY_REPORT_VIEW,
+    resource_type="procurement",
+    organization_type="SCHOOL",
 )
 
 # Browser-cookie CSRF protection for state-changing requests.

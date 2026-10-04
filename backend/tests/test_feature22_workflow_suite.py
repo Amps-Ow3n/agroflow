@@ -14,6 +14,7 @@ import pytest
 from app.services.procurement_service import (
     VALID_TRANSITIONS,
     cancel_procurement,
+    complete_procurement,
     transition_procurement,
 )
 from app.services.delivery_service import create_delivery
@@ -169,6 +170,30 @@ def test_workflow_verify_delivery_twice_is_rejected():
     assert getattr(exc.value, "status_code", None) == 409
     assert len(c.inspections) == 1
     assert c.deliveries[delivery["id"]]["delivery_status"] == "ACCEPTED"
+
+
+def test_workflow_completion_is_an_explicit_closed_cycle_action():
+    db = FakeDB()
+    c = _seed_workflow_procurement(db, "ACCEPTED")
+
+    result = complete_procurement(c, 1, 100)
+
+    assert result["to_status"] == "COMPLETED"
+    assert c.procurements[1]["status"] == "COMPLETED"
+    assert c.events[-1]["id"] >= 1
+
+
+def test_workflow_completion_is_blocked_by_open_corrective_action():
+    db = FakeDB()
+    c = _seed_workflow_procurement(db, "ACCEPTED")
+    c.corrective_actions[5001] = {"id": 5001, "status": "OPEN"}
+
+    with pytest.raises(Exception) as exc:
+        complete_procurement(c, 1, 100)
+
+    assert getattr(exc.value, "status_code", None) == 409
+    assert c.procurements[1]["status"] == "ACCEPTED"
+    assert c.events == []
 
 
 def test_workflow_acceptance_is_not_repeatable_after_completion():
