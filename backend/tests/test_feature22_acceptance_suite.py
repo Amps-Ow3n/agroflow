@@ -129,7 +129,7 @@ def test_acceptance_partial_delivery_can_explain_quantity_failure():
     assert shortfall == Decimal("70")
     assert variance == Decimal("14")
     assert inspection["delivery"]["delivery_status"] == "ACCEPTED"
-    transition_procurement(c, 1, 100, "ACCEPTED")
+    assert c.procurements[1]["status"] == "ACCEPTED"
     assert c.procurements[1]["status"] == "ACCEPTED"
 
 

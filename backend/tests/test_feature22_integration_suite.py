@@ -408,18 +408,17 @@ class FakeCursor:
             self.deliveries[did]["updated_at"] = datetime.now()
             self.result = [self.deliveries[did]]
             return
-        if "SELECT POL.ID,POL.QUANTITY,COALESCE(SUM" in q:
+        if "COUNT(D.ID) AS DELIVERY_COUNT" in q and "ACCEPTED_DELIVERY_COUNT" in q:
             pid = params[0]
-            rows = []
-            for line in self.po_lines.values():
-                accepted = Decimal("0")
-                for d in self.deliveries.values():
-                    if d["delivery_status"] == "ACCEPTED":
-                        c = self.commitments.get(d["commitment_id"])
-                        if c and c["purchase_order_line_id"] == line["id"]:
-                            accepted += sum(x["actual_quantity"] for x in self.delivery_lines if x["delivery_id"] == d["id"] and x["procurement_item_id"] == line["procurement_item_id"])
-                rows.append({"id": line["id"], "quantity": line["quantity"], "accepted": accepted})
-            self.result = rows if rows else []
+            deliveries = []
+            for d in self.deliveries.values():
+                c = self.commitments.get(d["commitment_id"])
+                po = self.purchase_orders.get(c["purchase_order_id"]) if c else None
+                if po and po["procurement_id"] == pid and d["delivery_status"] != "REJECTED":
+                    inspection = next((i for i in self.inspections.values() if i["delivery_id"] == d["id"]), None)
+                    deliveries.append((d, inspection))
+            accepted = sum(1 for d, i in deliveries if d["delivery_status"] == "ACCEPTED" and i and i["result"] == "ACCEPTED")
+            self.result = [{"delivery_count": len(deliveries), "accepted_delivery_count": accepted}]
             return
 
         # -------------------- corrective action --------------------
@@ -692,6 +691,7 @@ def test_integration_inspection_updates_delivery_and_records_accepted_quantity()
     assert result["inspection"]["received_qty"] == Decimal("430")
     assert result["delivery"]["delivery_status"] == "ACCEPTED"
     assert c.inspections[4001]["result"] == "ACCEPTED"
+    assert c.procurements[1]["status"] == "ACCEPTED"
 
 
 def test_integration_inspection_rejects_received_quantity_above_delivery_without_persisting_inspection():

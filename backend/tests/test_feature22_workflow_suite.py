@@ -78,6 +78,30 @@ def test_workflow_partial_delivery_preserves_500_to_430_evidence():
     assert variance == Decimal("14")
 
 
+
+def test_workflow_accepted_inspection_with_quantity_shortfall_can_close_cycle():
+    db = FakeDB()
+    c = _seed_workflow_procurement(db, "DELIVERY")
+    c.commitments[1001] = {
+        "id": 1001, "purchase_order_id": 10, "purchase_order_line_id": 101,
+        "supplier_id": 50, "promised_qty": Decimal("500"), "status": "ACCEPTED",
+    }
+    delivery = create_delivery(c, 100, DeliveryCreate(
+        commitment_id=1001, delivery_date=date(2026, 9, 30), condition="Good",
+        lines=[DeliveryLineCreate(procurement_item_id=201, actual_quantity=Decimal("430"))],
+    ))
+    inspected = inspect_delivery(c, delivery["id"], 100, InspectionCreate(
+        received_qty=Decimal("430"), result="ACCEPTED", quality_status="GOOD",
+        delay_status="ON_TIME",
+    ))
+
+    assert inspected["procurement_transition"]["to_status"] == "ACCEPTED"
+    assert c.procurements[1]["status"] == "ACCEPTED"
+
+    completed = complete_procurement(c, 1, 100)
+    assert completed["to_status"] == "COMPLETED"
+    assert c.procurements[1]["status"] == "COMPLETED"
+
 def test_workflow_rejection_corrective_action_replacement_and_reinspection():
     db = FakeDB()
     c = _seed_workflow_procurement(db, "DELIVERY")

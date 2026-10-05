@@ -14,15 +14,33 @@ def _delivery_for_school(cursor,delivery_id,user_id,for_update=False):
     return cursor.fetchone()
 
 
-def _accepted_quantity_for_procurement(cursor,procurement_id):
-    cursor.execute("""SELECT pol.id,pol.quantity,COALESCE(SUM(CASE WHEN d.delivery_status='ACCEPTED' THEN dl.actual_quantity ELSE 0 END),0) AS accepted
-                       FROM purchase_orders po JOIN purchase_order_lines pol ON pol.purchase_order_id=po.id
-                       LEFT JOIN supplier_commitments sc ON sc.purchase_order_line_id=pol.id
-                       LEFT JOIN deliveries d ON d.commitment_id=sc.id
-                       LEFT JOIN delivery_lines dl ON dl.delivery_id=d.id AND dl.procurement_item_id=pol.procurement_item_id
-                       WHERE po.procurement_id=%s GROUP BY pol.id,pol.quantity""",(procurement_id,))
-    rows=cursor.fetchall()
-    return bool(rows) and all(row["accepted"] >= row["quantity"] for row in rows)
+def _all_deliveries_accepted_for_procurement(cursor,procurement_id):
+    """Return True when every recorded delivery for the procurement has been accepted.
+
+    Quantity discrepancies are evidence of fulfilment variance, not by themselves a
+    failed inspection. A procurement can therefore reach ACCEPTED after all deliveries
+    have been inspected and accepted even when the verified quantity is below the
+    promised quantity. The discrepancy remains visible to the reality report and
+    dashboard.
+    """
+    cursor.execute("""
+        SELECT
+            COUNT(d.id) AS delivery_count,
+            COUNT(*) FILTER (
+                WHERE d.delivery_status = 'ACCEPTED'
+                  AND i.result = 'ACCEPTED'
+            ) AS accepted_delivery_count
+        FROM purchase_orders po
+        JOIN supplier_commitments sc ON sc.purchase_order_id = po.id
+        JOIN deliveries d ON d.commitment_id = sc.id
+        LEFT JOIN inspections i ON i.delivery_id = d.id
+        WHERE po.procurement_id = %s
+          AND d.delivery_status <> 'REJECTED'
+    """, (procurement_id,))
+    row = cursor.fetchone() or {}
+    delivery_count = row.get("delivery_count", 0)
+    accepted_delivery_count = row.get("accepted_delivery_count", 0)
+    return delivery_count > 0 and delivery_count == accepted_delivery_count
 
 
 def inspect_delivery(cursor,delivery_id,user_id,payload):
@@ -53,9 +71,16 @@ def inspect_delivery(cursor,delivery_id,user_id,payload):
     transition=None
     if payload.result=="ACCEPTED":
         if procurement["status"]=="DELIVERY": transition=transition_procurement(cursor,delivery["procurement_id"],user_id,"INSPECTION","Delivery entered inspection.")
-        if _accepted_quantity_for_procurement(cursor,delivery["procurement_id"]):
+        if _all_deliveries_accepted_for_procurement(cursor,delivery["procurement_id"]):
             current="INSPECTION" if transition else procurement["status"]
-            if current=="INSPECTION": transition=transition_procurement(cursor,delivery["procurement_id"],user_id,"ACCEPTED","All ordered quantities have been accepted.")
+            if current=="INSPECTION":
+                transition=transition_procurement(
+                    cursor,
+                    delivery["procurement_id"],
+                    user_id,
+                    "ACCEPTED",
+                    "All recorded deliveries have been inspected and accepted; any quantity variance remains recorded as a discrepancy.",
+                )
     return {"inspection":inspection,"delivery":updated,"procurement_transition":transition}
 
 
