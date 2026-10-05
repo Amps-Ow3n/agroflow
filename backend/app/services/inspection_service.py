@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from app.models.procurement_events import record_audit_event, record_procurement_event
-from app.services.procurement_service import transition_procurement
+from app.services.procurement_service import transition_procurement, get_procurement_for_user
 
 
 def _delivery_for_school(cursor,delivery_id,user_id,for_update=False):
@@ -70,17 +70,39 @@ def inspect_delivery(cursor,delivery_id,user_id,payload):
     record_audit_event(cursor,delivery["procurement_id"],user_id,"INSPECT_DELIVERY","inspection",inspection["id"],{"delivery_status":"AWAITING_INSPECTION"},{"delivery_status":payload.result,"result":payload.result})
     transition=None
     if payload.result=="ACCEPTED":
-        if procurement["status"]=="DELIVERY": transition=transition_procurement(cursor,delivery["procurement_id"],user_id,"INSPECTION","Delivery entered inspection.")
-        if _all_deliveries_accepted_for_procurement(cursor,delivery["procurement_id"]):
-            current="INSPECTION" if transition else procurement["status"]
-            if current=="INSPECTION":
-                transition=transition_procurement(
-                    cursor,
-                    delivery["procurement_id"],
-                    user_id,
-                    "ACCEPTED",
-                    "All recorded deliveries have been inspected and accepted; any quantity variance remains recorded as a discrepancy.",
-                )
+        # Re-read the procurement through the same organization-scoped lookup
+        # used by the transition service. This makes the decision from the
+        # persisted state after the inspection writes, rather than relying on
+        # the status snapshot taken before the inspection.
+        refreshed = get_procurement_for_user(
+            cursor,
+            delivery["procurement_id"],
+            user_id,
+            for_update=True,
+        )
+        current = refreshed["status"] if refreshed else None
+
+        if current == "DELIVERY":
+            transition = transition_procurement(
+                cursor,
+                delivery["procurement_id"],
+                user_id,
+                "INSPECTION",
+                "Delivery entered inspection.",
+            )
+            current = "INSPECTION"
+
+        if current == "INSPECTION" and _all_deliveries_accepted_for_procurement(
+            cursor, delivery["procurement_id"]
+        ):
+            transition = transition_procurement(
+                cursor,
+                delivery["procurement_id"],
+                user_id,
+                "ACCEPTED",
+                "All recorded deliveries have been inspected and accepted; any quantity variance remains recorded as a discrepancy.",
+            )
+
     return {"inspection":inspection,"delivery":updated,"procurement_transition":transition}
 
 
