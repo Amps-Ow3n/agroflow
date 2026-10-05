@@ -10,6 +10,7 @@ from app.schemas.base import (
     PositiveQuantity,
     NonNegativeMoney,
 )
+from app.utils.units import validate_product_unit
 
 
 PROCUREMENT_METHODS = {
@@ -130,6 +131,15 @@ class ProcurementCreate(AgroFlowRequest):
             )
 
         return value
+
+    @field_validator("unit")
+    @classmethod
+    def validate_unit_for_product(cls, value, info):
+        item_name = info.data.get("item_name", "")
+        try:
+            return validate_product_unit(item_name, value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("procurement_method")
     @classmethod

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.db import get_db
 from app.core.dependencies import (
@@ -23,11 +23,16 @@ router = APIRouter(prefix="/procurements", tags=["Procurements"])
 
 
 @router.post("", status_code=201)
-def create(payload: ProcurementCreate, user=Depends(require_procurement_create)):
+def create(request: Request, payload: ProcurementCreate, user=Depends(require_procurement_create)):
     conn, cursor = get_db()
     try:
         with write_transaction(conn):
-            return create_procurement(cursor, user["user"]["id"], payload)
+            organization_id = request.headers.get("X-Organization-ID")
+            try:
+                organization_id = int(organization_id) if organization_id else None
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Invalid organization context.")
+            return create_procurement(cursor, user["user"]["id"], payload, organization_id=organization_id)
     finally:
         conn.close()
 

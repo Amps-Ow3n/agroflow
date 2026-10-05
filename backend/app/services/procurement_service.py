@@ -21,17 +21,24 @@ VALID_TRANSITIONS = {
 }
 
 
-def get_active_school_organization(cursor, user_id):
+def get_active_school_organization(cursor, user_id, organization_id=None):
+    params = [user_id]
+    organization_filter = ""
+    if organization_id is not None:
+        organization_filter = " AND o.id=%s"
+        params.append(organization_id)
+
     cursor.execute(
-        """
+        f"""
         SELECT o.id,o.name,o.organization_type,o.status,o.verification_status
         FROM organization_memberships om
         JOIN organizations o ON o.id=om.organization_id
         WHERE om.user_id=%s AND om.status='ACTIVE'
           AND o.organization_type='SCHOOL' AND o.status='ACTIVE' AND o.verification_status='VERIFIED'
+          {organization_filter}
         ORDER BY o.id
         """,
-        (user_id,),
+        tuple(params),
     )
     rows = cursor.fetchall()
     if not rows:
@@ -113,8 +120,8 @@ def get_procurement_items(cursor, procurement_id):
     return cursor.fetchall()
 
 
-def create_procurement(cursor, user_id, payload):
-    organization = get_active_school_organization(cursor, user_id)
+def create_procurement(cursor, user_id, payload, organization_id=None):
+    organization = get_active_school_organization(cursor, user_id, organization_id=organization_id)
     if not user_belongs_to_organization(cursor, user_id, organization["id"]):
         raise HTTPException(403, "You do not belong to the school organization.")
 
