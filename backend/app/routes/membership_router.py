@@ -6,12 +6,14 @@ from app.core.dependencies import (
 from app.schemas.membership_schema import (
     AddMembershipResponsibilityRequest,
     AddOrganizationMemberRequest,
+    MembershipDecisionRequest,
 )
 from app.services.membership_service import (
     add_membership_responsibility,
     add_organization_member,
     list_organization_members,
     list_assignable_responsibilities,
+    decide_membership_request,
 )
 
 router = APIRouter(
@@ -54,5 +56,19 @@ def add_member(
         responsibility_code=(
             payload.responsibility_code
         ),
+        actor_user_id=user["user"]["id"],
+    )
+
+@router.post("/{organization_id}/memberships/{membership_id}/decision")
+def decide_membership(
+    organization_id: int,
+    membership_id: int,
+    payload: MembershipDecisionRequest,
+    user=Depends(require_membership_responsibility_manage),
+):
+    return decide_membership_request(
+        organization_id=organization_id,
+        membership_id=membership_id,
+        decision=payload.decision,
         actor_user_id=user["user"]["id"],
     )

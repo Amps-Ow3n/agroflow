@@ -11,3 +11,6 @@ class AddOrganizationMemberRequest(
 ):
     email: EmailStr
     responsibility_code: str
+
+class MembershipDecisionRequest(BaseModel):
+    decision: str

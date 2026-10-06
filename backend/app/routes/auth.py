@@ -22,33 +22,120 @@ def register(payload: UserRegister, request: Request):
             cursor.execute("SELECT id FROM users WHERE email = %s", (str(payload.email),))
             if cursor.fetchone():
                 raise HTTPException(409, "A user with this email already exists.")
-            cursor.execute("SELECT id FROM responsibilities WHERE code = %s", (payload.responsibility,))
+
+            cursor.execute("SELECT id, code FROM responsibilities WHERE code = %s", (payload.responsibility,))
             responsibility = cursor.fetchone()
             if not responsibility:
                 raise HTTPException(400, "Responsibility does not exist.")
-            cursor.execute("""
+
+            cursor.execute(
+                """
                 INSERT INTO users (name,email,password,status,is_system_admin)
                 VALUES (%s,%s,%s,'ACTIVE',FALSE) RETURNING id
-            """, (payload.full_name, str(payload.email), hash_password(payload.password)))
+                """,
+                (payload.full_name, str(payload.email), hash_password(payload.password)),
+            )
             user = cursor.fetchone()
-            cursor.execute("""
-                INSERT INTO organizations (name,organization_type,status,verification_status)
-                VALUES (%s,%s,'PENDING','PENDING') RETURNING id
-            """, (payload.organization_name, payload.organization_type))
-            organization = cursor.fetchone()
-            cursor.execute("""
+
+            if payload.registration_mode == "CREATE":
+                cursor.execute(
+                    """
+                    INSERT INTO organizations (name,organization_type,status,verification_status)
+                    VALUES (%s,%s,'PENDING','PENDING') RETURNING id
+                    """,
+                    (payload.organization_name, payload.organization_type),
+                )
+                organization = cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    INSERT INTO organization_memberships (organization_id,user_id,status)
+                    VALUES (%s,%s,'PENDING') RETURNING id
+                    """,
+                    (organization["id"], user["id"]),
+                )
+                membership = cursor.fetchone()
+
+                cursor.execute(
+                    "INSERT INTO membership_responsibilities (membership_id,responsibility_id) VALUES (%s,%s)",
+                    (membership["id"], responsibility["id"]),
+                )
+
+                cursor.execute(
+                    """
+                    INSERT INTO organization_verification_records (organization_id,status,verification_type,submitted_by)
+                    VALUES (%s,'PENDING',%s,%s)
+                    """,
+                    (organization["id"], payload.organization_type, user["id"]),
+                )
+
+                if payload.organization_type == "SUPPLIER":
+                    cursor.execute(
+                        "INSERT INTO suppliers (organization_id,status) VALUES (%s,'ACTIVE')",
+                        (organization["id"],),
+                    )
+
+                return {
+                    "message": "Organization registration submitted for verification.",
+                    "user_id": user["id"],
+                    "organization_id": organization["id"],
+                    "verification_status": "PENDING",
+                    "membership_status": "PENDING",
+                }
+
+            # JOIN never creates an organization. It creates a pending membership
+            # request against one existing verified organization.
+            cursor.execute(
+                """
+                SELECT id, name, organization_type, status, verification_status
+                FROM organizations
+                WHERE LOWER(TRIM(name)) = LOWER(TRIM(%s))
+                  AND organization_type = %s
+                  AND status = 'ACTIVE'
+                  AND verification_status = 'VERIFIED'
+                ORDER BY id
+                FOR SHARE
+                """,
+                (payload.organization_name, payload.organization_type),
+            )
+            organizations = cursor.fetchall()
+
+            if not organizations:
+                raise HTTPException(404, "No active verified organization with that name exists. Create the organization first, or ask the organization administrator for the exact organization name.")
+
+            if len(organizations) > 1:
+                raise HTTPException(409, "More than one active verified organization has that name. Ask the organization administrator to add your existing AgroFlow account instead of using self-service joining.")
+
+            organization = organizations[0]
+
+            cursor.execute(
+                "SELECT id, status FROM organization_memberships WHERE organization_id=%s AND user_id=%s FOR UPDATE",
+                (organization["id"], user["id"]),
+            )
+            if cursor.fetchone():
+                raise HTTPException(409, "You are already a member of this organization.")
+
+            cursor.execute(
+                """
                 INSERT INTO organization_memberships (organization_id,user_id,status)
                 VALUES (%s,%s,'PENDING') RETURNING id
-            """, (organization["id"], user["id"]))
+                """,
+                (organization["id"], user["id"]),
+            )
             membership = cursor.fetchone()
-            cursor.execute("INSERT INTO membership_responsibilities (membership_id,responsibility_id) VALUES (%s,%s)", (membership["id"], responsibility["id"]))
-            cursor.execute("""
-                INSERT INTO organization_verification_records (organization_id,status,verification_type,submitted_by)
-                VALUES (%s,'PENDING',%s,%s)
-            """, (organization["id"], payload.organization_type, user["id"]))
-            if payload.organization_type == "SUPPLIER":
-                cursor.execute("INSERT INTO suppliers (organization_id,status) VALUES (%s,'ACTIVE')", (organization["id"],))
-            return {"message":"Organization registration submitted for verification.","user_id":user["id"],"organization_id":organization["id"],"verification_status":"PENDING","membership_status":"PENDING"}
+
+            cursor.execute(
+                "INSERT INTO membership_responsibilities (membership_id,responsibility_id) VALUES (%s,%s)",
+                (membership["id"], responsibility["id"]),
+            )
+
+            return {
+                "message": "Your membership request was submitted. An organization administrator must approve it before you can access the organization.",
+                "user_id": user["id"],
+                "organization_id": organization["id"],
+                "verification_status": "VERIFIED",
+                "membership_status": "PENDING",
+            }
     finally:
         conn.close()
 

@@ -2,6 +2,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 
 from app.services.procurement_service import get_procurement_for_user, get_procurement_items
+from app.services.supplier_performance_service import get_supplier_performance
 
 
 def _number(value):
@@ -233,29 +234,15 @@ def get_reality_report(cursor, procurement_id, user_id):
     supplier_id = selection["supplier_id"] if selection else (purchase_order["supplier_id"] if purchase_order else None)
     historical = None
     if supplier_id:
-        cursor.execute(
-            """
-            SELECT
-                supplier_id,
-                observation_count,
-                completed_procurement_count,
-                completed_commitment_count,
-                promised_quantity,
-                accepted_quantity,
-                fulfilment_rate,
-                quantity_variance_rate,
-                on_time_delivery_rate,
-                quality_acceptance_rate,
-                timing_observation_count,
-                quality_observation_count,
-                status,
-                calculated_at
-            FROM supplier_performance_metrics
-            WHERE supplier_id = %s
-            """,
-            (supplier_id,),
+        # Reality Report history must be derived from completed cycles that
+        # occurred before the procurement currently being reported. Do not
+        # depend on a persisted performance snapshot, because snapshots can
+        # be stale or absent while the underlying procurement evidence exists.
+        historical = get_supplier_performance(
+            cursor,
+            supplier_id,
+            exclude_procurement_id=procurement_id,
         )
-        historical = cursor.fetchone()
 
     promised_by_line = {}
     for commitment in commitments:

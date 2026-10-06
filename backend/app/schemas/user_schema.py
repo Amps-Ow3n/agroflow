@@ -26,6 +26,8 @@ class UserRegister(AgroFlowRequest):
         max_length=72
     )
 
+    registration_mode: str = Field(default="CREATE", min_length=4, max_length=10)
+
     organization_name: str = Field(
         ...,
         min_length=2,
@@ -48,6 +50,15 @@ class UserRegister(AgroFlowRequest):
                 "Full name cannot be blank."
             )
 
+        return value
+
+
+    @field_validator("registration_mode")
+    @classmethod
+    def validate_registration_mode(cls, value):
+        value = value.strip().upper()
+        if value not in {"CREATE", "JOIN"}:
+            raise ValueError("Registration mode must be CREATE or JOIN.")
         return value
 
 
@@ -123,6 +134,9 @@ class UserRegister(AgroFlowRequest):
             "SUPPLIER_USER",
             "SUPPLIER_ADMIN"
         }
+
+        if self.registration_mode == "JOIN" and self.responsibility in {"ORGANIZATION_ADMIN", "SUPPLIER_ADMIN"}:
+            raise ValueError("Administrator responsibilities must be assigned by the organization administrator after membership approval.")
 
         if self.organization_type == "SCHOOL":
 

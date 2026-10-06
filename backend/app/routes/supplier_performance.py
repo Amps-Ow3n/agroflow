@@ -15,7 +15,8 @@ from app.core.dependencies import (
 
 from app.services.supplier_performance_service import (
     get_supplier_performance,
-    refresh_supplier_performance
+    refresh_supplier_performance,
+    get_supplier_history,
 )
 
 from app.models.suppliers import (
@@ -88,6 +89,19 @@ def get_my_performance(
 # SUPPLIER PERFORMANCE
 # SCHOOL / PROCUREMENT VIEW
 # =========================================================
+
+@router.get("/me/history")
+def get_my_history(user=Depends(require_supplier_user)):
+    conn, cursor = get_db()
+    try:
+        supplier = get_supplier_by_user(cursor, user["user"]["id"])
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier profile not found.")
+        history = get_supplier_history(cursor, supplier["id"])
+        return {"supplier": dict(supplier), "history": history}
+    finally:
+        conn.close()
+
 
 @router.get(
     "/{supplier_id}/performance"

@@ -617,3 +617,61 @@ def add_membership_responsibility(
 
     finally:
         conn.close()
+
+def decide_membership_request(
+    organization_id: int,
+    membership_id: int,
+    decision: str,
+    actor_user_id: int,
+):
+    decision = decision.strip().upper()
+    if decision not in {"APPROVE", "REJECT"}:
+        raise HTTPException(400, "Membership decision must be APPROVE or REJECT.")
+
+    conn, cursor = get_db()
+    try:
+        with write_transaction(conn):
+            cursor.execute(
+                """
+                SELECT om.id, om.user_id, om.status, o.organization_type,
+                       o.status AS organization_status,
+                       o.verification_status,
+                       u.name AS full_name, u.email
+                FROM organization_memberships om
+                JOIN organizations o ON o.id = om.organization_id
+                JOIN users u ON u.id = om.user_id
+                WHERE om.id = %s
+                  AND om.organization_id = %s
+                FOR UPDATE
+                """,
+                (membership_id, organization_id),
+            )
+            membership = cursor.fetchone()
+            if not membership:
+                raise HTTPException(404, "Membership request not found.")
+            if membership["status"] != "PENDING":
+                raise HTTPException(409, "Only pending membership requests can be decided.")
+            if membership["organization_status"] != "ACTIVE" or membership["verification_status"] != "VERIFIED":
+                raise HTTPException(409, "The organization must be active and verified before membership can be approved.")
+
+            new_status = "ACTIVE" if decision == "APPROVE" else "REJECTED"
+            cursor.execute(
+                """
+                UPDATE organization_memberships
+                SET status = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (new_status, membership_id),
+            )
+
+            return {
+                "status": new_status,
+                "membership_id": membership_id,
+                "organization_id": organization_id,
+                "user_id": membership["user_id"],
+                "full_name": membership["full_name"],
+                "email": membership["email"],
+                "actor_user_id": actor_user_id,
+            }
+    finally:
+        conn.close()

@@ -7,14 +7,16 @@ def pct(a,b):
     if dec(b)<=0: return None
     return (dec(a)/dec(b)*Decimal("100")).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)
 
-def calculate_supplier_performance(cursor,supplier_id):
+def calculate_supplier_performance(cursor,supplier_id,exclude_procurement_id=None):
     cursor.execute("""SELECT p.id AS procurement_id,sc.id AS commitment_id,sc.promised_qty,sc.delivery_end,
                               d.id AS delivery_id,d.delivery_date,i.id AS inspection_id,i.result,i.received_qty
                        FROM procurements p JOIN purchase_orders po ON po.procurement_id=p.id
                        JOIN supplier_commitments sc ON sc.purchase_order_id=po.id AND sc.supplier_id=%s
                        LEFT JOIN deliveries d ON d.commitment_id=sc.id
                        LEFT JOIN inspections i ON i.delivery_id=d.id
-                       WHERE p.status='COMPLETED' ORDER BY p.id,sc.id,d.id,i.id""",(supplier_id,))
+                       WHERE p.status='COMPLETED'
+                         AND (%s IS NULL OR p.id <> %s)
+                       ORDER BY p.id,sc.id,d.id,i.id""",(supplier_id,exclude_procurement_id,exclude_procurement_id))
     rows=cursor.fetchall()
     by_proc={}
     for r in rows:

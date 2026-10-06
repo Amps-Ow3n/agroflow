@@ -285,10 +285,39 @@ class FakeCursor:
             return
 
         # -------------------- delivery --------------------
+        if "SELECT D.*,SC.PURCHASE_ORDER_ID,SC.PURCHASE_ORDER_LINE_ID,SC.SUPPLIER_ID" in q and "FROM DELIVERIES D JOIN SUPPLIER_COMMITMENTS SC" in q:
+            did, uid = params[:2]
+            d = self.deliveries.get(did)
+            c = self.commitments.get(d["commitment_id"]) if d else None
+            po = self.purchase_orders.get(c["purchase_order_id"]) if c else None
+            p = self.procurements.get(po["procurement_id"]) if po else None
+            ok = d and c and po and p and self.memberships.get(uid, {}).get("organization_id") == p.get("organization_id")
+            if ok:
+                self.result = [{**d, **{
+                    "purchase_order_id": po["id"],
+                    "purchase_order_line_id": c["purchase_order_line_id"],
+                    "supplier_id": c["supplier_id"],
+                    "promised_qty": c["promised_qty"],
+                    "procurement_id": po["procurement_id"],
+                    "procurement_status": p["status"],
+                    "organization_id": p["organization_id"],
+                }}]
+            else:
+                self.result = []
+            return
+
         if q.startswith("SELECT ID,COMMITMENT_ID,DELIVERY_STATUS FROM DELIVERIES WHERE ID=%S"):
             did = params[0]
             d = self.deliveries.get(did)
             self.result = [{"id": did, "commitment_id": d["commitment_id"], "delivery_status": d["delivery_status"]}] if d else []
+            return
+
+        if "SELECT PO.PROCUREMENT_ID FROM DELIVERIES D" in q and "WHERE D.ID = %S" in q:
+            did = params[0]
+            d = self.deliveries.get(did)
+            c = self.commitments.get(d["commitment_id"]) if d else None
+            po = self.purchase_orders.get(c["purchase_order_id"]) if c else None
+            self.result = [{"procurement_id": po["procurement_id"]}] if c and po else []
             return
 
         if "SELECT PO.PROCUREMENT_ID FROM SUPPLIER_COMMITMENTS SC" in q and "WHERE SC.ID=%S" in q:
@@ -340,7 +369,7 @@ class FakeCursor:
             self.delivery_lines.append({"id": len(self.delivery_lines)+1, "delivery_id": did, "procurement_item_id": item_id, "actual_quantity": qty})
             self.result = []
             return
-        if "SELECT D.*,SC.PURCHASE_ORDER_ID" in q and "WHERE D.ID=%S" in q:
+        if "SELECT D.*,SC.PURCHASE_ORDER_ID" in q and "WHERE D.ID = %S" in q:
             did, uid = params[:2]
             d = self.deliveries.get(did)
             c = self.commitments.get(d["commitment_id"]) if d else None
@@ -363,7 +392,7 @@ class FakeCursor:
             return
 
         # -------------------- inspection --------------------
-        if q.startswith("SELECT PO.PROCUREMENT_ID FROM DELIVERIES D JOIN SUPPLIER_COMMITMENTS SC") and "WHERE D.ID=%S" in q:
+        if q.startswith("SELECT PO.PROCUREMENT_ID FROM DELIVERIES D JOIN SUPPLIER_COMMITMENTS SC") and "WHERE D.ID = %S" in q:
             did = params[0]
             d = self.deliveries.get(did)
             c = self.commitments.get(d["commitment_id"]) if d else None
@@ -371,7 +400,7 @@ class FakeCursor:
             self.result = [{"procurement_id": po["procurement_id"]}] if d and c and po else []
             return
 
-        if "FROM DELIVERIES D JOIN SUPPLIER_COMMITMENTS SC" in q and "WHERE D.ID=%S" in q:
+        if "FROM DELIVERIES D JOIN SUPPLIER_COMMITMENTS SC" in q and "WHERE D.ID = %S" in q:
             did, uid = params[:2]
             d = self.deliveries.get(did)
             c = self.commitments.get(d["commitment_id"]) if d else None
